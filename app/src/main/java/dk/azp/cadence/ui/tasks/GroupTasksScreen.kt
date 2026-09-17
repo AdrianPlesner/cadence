@@ -1,5 +1,10 @@
 package dk.azp.cadence.ui.tasks
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
@@ -31,6 +36,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -38,6 +44,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -122,6 +130,8 @@ fun GroupTasksScreen(groupId: String, onBack: () -> Unit, onOpenTask: (String) -
     var adding by rememberSaveable { mutableStateOf(false) }
     var pickingDateFor by rememberSaveable { mutableStateOf<String?>(null) }
 
+    NotificationPermissionRequest(needed = rows.any { it.task.notifyWhenDue })
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -174,6 +184,24 @@ fun GroupTasksScreen(groupId: String, onBack: () -> Unit, onOpenTask: (String) -
             onDismiss = { pickingDateFor = null },
             onPick = { date -> pickingDateFor = null; viewModel.markDone(taskId, date) },
         )
+    }
+}
+
+/** Tasks with reminders may arrive through sync, so the permission is requested when such a task is first shown. */
+@Composable
+private fun NotificationPermissionRequest(needed: Boolean) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        return
+    }
+    val context = LocalContext.current
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    var asked by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(needed) {
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        if (needed && !granted && !asked) {
+            asked = true
+            launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 }
 

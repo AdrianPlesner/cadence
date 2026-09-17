@@ -27,7 +27,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             CompositionLocalProvider(LocalAppContainer provides container) {
                 CadenceTheme {
-                    CadenceNavHost(requestedTask = requestedTask, onRequestedTaskShown = { requestedTask = null })
+                    CadenceNavHost(requestedTask = requestedTask, onRequestedTaskShown = ::clearRequestedTask)
                 }
             }
         }
@@ -35,7 +35,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         requestedTask = intent.requestedTask()
+    }
+
+    /** Also strips the extras so a later recreation of the activity does not jump to the task again. */
+    private fun clearRequestedTask() {
+        requestedTask = null
+        intent.removeExtra(EXTRA_GROUP_ID)
+        intent.removeExtra(EXTRA_TASK_ID)
     }
 
     private fun Intent.requestedTask(): TaskDetailRoute? {
