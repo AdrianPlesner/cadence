@@ -1,6 +1,8 @@
 package dk.azp.cadence.ui.overview
 
 import android.content.ClipData
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -47,11 +50,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import dk.azp.cadence.data.DeviceIdentity
+import dk.azp.cadence.data.ble.BleWake
 import dk.azp.cadence.data.db.CategoryEntity
 import dk.azp.cadence.data.db.DeviceWithSync
 import dk.azp.cadence.data.db.GroupEntity
@@ -95,6 +100,11 @@ class GroupOverviewViewModel(
     fun localAddress(): String? = syncManager.localAddress()
 
     fun syncNow() = syncManager.syncNow()
+
+    fun bluetoothPermissionsGranted(context: android.content.Context) {
+        BleWake.register(context)
+        syncManager.refreshBeacon()
+    }
 
     fun renameGroup(name: String) {
         viewModelScope.launch { groupRepository.renameGroup(groupId, name) }
@@ -165,6 +175,7 @@ fun GroupOverviewScreen(groupId: String, onBack: () -> Unit, onLeft: () -> Unit)
             }
             item { SectionTitle("Sync") }
             item { SyncSection(syncStatus, onSyncNow = viewModel::syncNow) }
+            item { BluetoothWakeRow(onGranted = viewModel::bluetoothPermissionsGranted) }
             item { SectionTitle("Devices") }
             items(members, key = { it.device.id }) { member ->
                 val isThisDevice = member.device.id == viewModel.ownDeviceId
@@ -289,6 +300,32 @@ private fun SyncSection(status: SyncManager.Status, onSyncNow: () -> Unit) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+/** Offers the Bluetooth permissions that let nearby devices wake each other for a sync. Hidden once granted. */
+@Composable
+private fun BluetoothWakeRow(onGranted: (android.content.Context) -> Unit) {
+    val context = LocalContext.current
+    var granted by remember { mutableStateOf(BleWake.hasPermissions(context)) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        granted = result.values.all { it }
+        if (granted) {
+            onGranted(context)
+        }
+    }
+    if (BleWake.isSupported(context) && !granted) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "With Bluetooth allowed, devices near each other wake up and sync even when the app is closed on both.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(onClick = { launcher.launch(BleWake.requiredPermissions.toTypedArray()) }) {
+                Icon(Icons.Default.Bluetooth, contentDescription = null)
+                Text("  Allow Bluetooth")
+            }
+        }
     }
 }
 

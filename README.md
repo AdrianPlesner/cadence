@@ -10,6 +10,8 @@ there is no server.
   made it. Live tables are derived from the log with row-level last-writer-wins.
 - Devices advertise a small HTTP server over DNS-SD (`_cadence._tcp`) while the app is in the foreground and exchange
   the changes the other side has not seen. Any device relays changes it received from a third device.
+- While the sync server is up, the device also advertises a small Bluetooth LE beacon with its LAN address. Other
+  members register a system-level scan for that beacon, so a device with the app closed is woken and syncs at once.
 - All traffic is encrypted with a key derived from the group secret. The secret travels in the invite QR code, so
   holding it is what makes a device a member. Membership itself is synced data, so a device added on one phone appears
   on all of them.
@@ -25,7 +27,8 @@ there is no server.
 
 ## Limitations, for now
 
-- Sync runs only while the app is in the foreground on both devices.
+- Sync runs while the app is open, in a short window about every 15 minutes in the background, and whenever a nearby
+  device's Bluetooth beacon wakes this one (Android 12 and up, after allowing Bluetooth in the group overview).
 - Removing a device is soft: it stops syncing, but it keeps the data it already has and could rejoin with a new invite.
 - Leaving a group is local; other devices keep listing the device until it is removed.
 - Reminders fire at 09:00 local time and the setting is shared by the whole group.

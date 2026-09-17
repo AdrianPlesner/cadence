@@ -3,6 +3,7 @@ package dk.azp.cadence.data.sync
 import android.content.Context
 import android.util.Log
 import dk.azp.cadence.data.DeviceIdentity
+import dk.azp.cadence.data.ble.BleBeacon
 import dk.azp.cadence.data.db.CadenceDatabase
 import dk.azp.cadence.data.db.GroupEntity
 import dk.azp.cadence.data.db.PeerSyncEntity
@@ -43,6 +44,7 @@ class SyncManager(
     val listenPort: StateFlow<Int> = listenPortFlow
 
     private var discovery: PeerDiscovery? = null
+    private val beacon = BleBeacon(context, identity.deviceId)
     private val peerLocks = mutableMapOf<String, Mutex>()
     /** Who currently wants the engine running; guarded by [lifecycleLock], which also orders start and stop. */
     private val holders = mutableSetOf<String>()
@@ -58,13 +60,17 @@ class SyncManager(
     }
 
     /**
-     * One background sync pass: brings the engine up, contacts every peer address seen before, leaves the engine running
-     * for [window] so discovered peers can be synced too, then hands the engine back. Returns a short status line.
+     * One background sync pass: brings the engine up, contacts [peer] if given and every peer address seen before,
+     * leaves the engine running for [window] so discovered peers can be synced too, then hands the engine back.
+     * Returns a short status line.
      */
-    suspend fun runBackgroundWindow(window: Duration): String {
+    suspend fun runBackgroundWindow(window: Duration, peer: PeerDiscovery.Peer? = null): String {
         val started = acquireNow(HOLDER_BACKGROUND)
         return try {
             if (started) {
+                if (peer != null) {
+                    syncWithPeer(peer)
+                }
                 syncKnownPeers()
                 delay(window)
                 withTimeoutOrNull(window) { statusFlow.first { it.activeSyncs == 0 } }
@@ -84,6 +90,7 @@ class SyncManager(
                 val port = server.start()
                 listenPortFlow.value = port
                 discovery = PeerDiscovery(context, identity.deviceId) { peer -> scope.launch { syncWithPeer(peer) } }.also { it.start(port) }
+                beacon.start(localAddress(), port)
                 statusFlow.update { it.copy(running = true) }
             }
         }.onFailure { error ->
@@ -100,6 +107,7 @@ class SyncManager(
         lifecycleLock.withLock {
             holders -= holder
             if (holders.isEmpty()) {
+                beacon.stop()
                 discovery?.stop()
                 discovery = null
                 server.stop()
@@ -110,6 +118,17 @@ class SyncManager(
     }
 
     fun localAddress(): String? = NetworkAddress.localIpv4(context)
+
+    /** Starts the beacon if the engine is already running, for use right after Bluetooth permissions were granted. */
+    fun refreshBeacon() {
+        scope.launch {
+            lifecycleLock.withLock {
+                if (discovery != null) {
+                    beacon.start(localAddress(), listenPortFlow.value)
+                }
+            }
+        }
+    }
 
     /** Rescans the network and retries every peer address seen before. */
     fun syncNow() {
