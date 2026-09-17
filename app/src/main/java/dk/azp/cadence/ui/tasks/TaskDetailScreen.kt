@@ -1,5 +1,6 @@
 package dk.azp.cadence.ui.tasks
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -182,7 +183,8 @@ fun TaskDetailScreen(groupId: String, taskId: String, onBack: () -> Unit) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SummaryCard(row: TaskRow) {
-    Card(Modifier.fillMaxWidth().padding(16.dp)) {
+    val outline = if (row.isOverdue) BorderStroke(2.dp, MaterialTheme.colorScheme.error) else null
+    Card(Modifier.fillMaxWidth().padding(16.dp), border = outline) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             val lastDone = row.lastDone
             val daysSince = row.daysSince

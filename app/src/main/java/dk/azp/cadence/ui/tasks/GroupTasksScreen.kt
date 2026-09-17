@@ -1,6 +1,7 @@
 package dk.azp.cadence.ui.tasks
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -190,9 +191,14 @@ private fun CategoryFilterRow(categories: List<CategoryEntity>, selected: String
 @Composable
 private fun TaskListRow(row: TaskRow, onClick: () -> Unit, onDoneToday: () -> Unit, onDoneOnDate: () -> Unit) {
     var menuOpen by rememberSaveable { mutableStateOf(false) }
+    val overdueOutline = if (row.isOverdue) {
+        Modifier.padding(horizontal = 8.dp, vertical = 4.dp).border(2.dp, MaterialTheme.colorScheme.error, MaterialTheme.shapes.medium)
+    } else {
+        Modifier
+    }
     Box {
         ListItem(
-            modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = { menuOpen = true }),
+            modifier = overdueOutline.combinedClickable(onClick = onClick, onLongClick = { menuOpen = true }),
             headlineContent = { Text(row.task.name) },
             supportingContent = {
                 Column {
@@ -227,5 +233,6 @@ fun DueLabel(row: TaskRow) {
         daysUntilDue == 0L -> MaterialTheme.colorScheme.tertiary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    Text(text, color = color, style = MaterialTheme.typography.labelMedium)
+    val style = if (row.isOverdue) MaterialTheme.typography.labelLarge else MaterialTheme.typography.labelMedium
+    Text(text, color = color, style = style)
 }
