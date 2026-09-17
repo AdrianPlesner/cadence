@@ -1,0 +1,121 @@
+package dk.azp.cadence.data.sync
+
+import android.content.Context
+import android.util.Log
+import dk.azp.cadence.data.DeviceIdentity
+import dk.azp.cadence.data.db.CadenceDatabase
+import dk.azp.cadence.data.db.GroupEntity
+import dk.azp.cadence.data.db.PeerSyncEntity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+/**
+ * Runs the sync server while the app is in the foreground, finds peers on the LAN and exchanges changes with every peer
+ * that is a member of one of this device's groups.
+ */
+class SyncManager(
+    private val context: Context,
+    private val scope: CoroutineScope,
+    private val db: CadenceDatabase,
+    private val identity: DeviceIdentity,
+    private val server: SyncServer,
+    private val client: SyncClient,
+) {
+
+    data class Status(val running: Boolean = false, val activeSyncs: Int = 0, val lastMessage: String? = null)
+
+    private val statusFlow = MutableStateFlow(Status())
+    val status: StateFlow<Status> = statusFlow
+
+    private val listenPortFlow = MutableStateFlow(0)
+    val listenPort: StateFlow<Int> = listenPortFlow
+
+    private var discovery: PeerDiscovery? = null
+    private val peerLocks = mutableMapOf<String, Mutex>()
+
+    fun start() {
+        scope.launch {
+            val port = server.start()
+            listenPortFlow.value = port
+            discovery = PeerDiscovery(context, identity.deviceId) { peer -> scope.launch { syncWithPeer(peer) } }.also { it.start(port) }
+            statusFlow.update { it.copy(running = true) }
+            syncKnownPeers()
+        }
+    }
+
+    fun stop() {
+        discovery?.stop()
+        discovery = null
+        server.stop()
+        listenPortFlow.value = 0
+        statusFlow.update { it.copy(running = false) }
+    }
+
+    fun localAddress(): String? = NetworkAddress.localIpv4(context)
+
+    /** Rescans the network and retries every peer address seen before. */
+    fun syncNow() {
+        discovery?.rescan()
+        scope.launch { syncKnownPeers() }
+    }
+
+    /** First sync after joining, against the address embedded in the invite. */
+    suspend fun syncWithInviteHost(group: GroupEntity, invite: Invite) {
+        val host = invite.host
+        val port = invite.port
+        if (host != null && port != null) {
+            syncGroupWithPeer(group, invite.hostDeviceId, host, port)
+        }
+    }
+
+    private suspend fun syncKnownPeers() {
+        val jobs = mutableListOf<Job>()
+        for (group in db.groupDao().getActive()) {
+            for (peer in db.peerSyncDao().knownAddresses(group.id)) {
+                val host = peer.lastHost
+                val port = peer.lastPort
+                if (host != null && port != null) {
+                    jobs += scope.launch { syncGroupWithPeer(group, peer.deviceId, host, port) }
+                }
+            }
+        }
+        jobs.joinAll()
+    }
+
+    private suspend fun syncWithPeer(peer: PeerDiscovery.Peer) {
+        val groupIds = db.deviceDao().groupIdsForMember(peer.deviceId).toSet()
+        for (group in db.groupDao().getActive().filter { it.id in groupIds }) {
+            syncGroupWithPeer(group, peer.deviceId, peer.host, peer.port)
+        }
+    }
+
+    private suspend fun syncGroupWithPeer(group: GroupEntity, peerDeviceId: String, host: String, port: Int) {
+        val lock = synchronized(peerLocks) { peerLocks.getOrPut("${group.id}/$peerDeviceId") { Mutex() } }
+        lock.withLock {
+            statusFlow.update { it.copy(activeSyncs = it.activeSyncs + 1) }
+            val outcome = runCatching { client.sync(group, host, port) }
+            val existing = db.peerSyncDao().get(group.id, peerDeviceId)
+            outcome.onSuccess { result ->
+                db.peerSyncDao().upsert(PeerSyncEntity(group.id, peerDeviceId, System.currentTimeMillis(), host, port, null))
+                statusFlow.update {
+                    it.copy(activeSyncs = it.activeSyncs - 1, lastMessage = "Synced with ${result.peerDeviceName}: sent ${result.sent}, received ${result.received}")
+                }
+            }.onFailure { error ->
+                Log.w(TAG, "Sync with $peerDeviceId at $host:$port failed", error)
+                db.peerSyncDao().upsert(PeerSyncEntity(group.id, peerDeviceId, existing?.lastSyncedAt, host, port, error.message ?: error::class.simpleName))
+                statusFlow.update { it.copy(activeSyncs = it.activeSyncs - 1, lastMessage = "Sync with $host failed: ${error.message}") }
+            }
+        }
+    }
+
+    private companion object {
+        const val TAG = "SyncManager"
+    }
+}
