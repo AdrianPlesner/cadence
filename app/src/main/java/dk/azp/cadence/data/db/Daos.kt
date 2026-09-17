@@ -60,6 +60,9 @@ interface DeviceDao {
     @Query("SELECT groupId FROM devices WHERE id = :deviceId AND deleted = 0")
     suspend fun groupIdsForMember(deviceId: String): List<String>
 
+    @Query("SELECT id FROM devices WHERE groupId = :groupId AND deleted = 1")
+    suspend fun kickedDeviceIds(groupId: String): List<String>
+
     @Upsert
     suspend fun upsert(device: DeviceEntity)
 

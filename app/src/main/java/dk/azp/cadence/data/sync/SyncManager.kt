@@ -6,6 +6,7 @@ import dk.azp.cadence.data.DeviceIdentity
 import dk.azp.cadence.data.db.CadenceDatabase
 import dk.azp.cadence.data.db.GroupEntity
 import dk.azp.cadence.data.db.PeerSyncEntity
+import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -127,6 +128,9 @@ class SyncManager(
                 }
             }.onFailure { error ->
                 Log.w(TAG, "Sync with $peerDeviceId at $host:$port failed", error)
+                if (error is SyncClient.PeerRejectedException && error.status == HttpStatusCode.Forbidden) {
+                    db.groupDao().setKicked(group.id, true)
+                }
                 db.peerSyncDao().upsert(PeerSyncEntity(group.id, peerDeviceId, existing?.lastSyncedAt, host, port, error.message ?: error::class.simpleName))
                 statusFlow.update { it.copy(activeSyncs = it.activeSyncs - 1, lastMessage = "Sync with $host failed: ${error.message}") }
             }

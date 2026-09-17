@@ -25,6 +25,7 @@ class SyncServer(
     private val identity: DeviceIdentity,
     private val engine: ChangeEngine,
     private val json: Json,
+    private val readmitDevice: suspend (groupId: String, deviceId: String, name: String) -> Unit,
     private val onPeerSynced: (groupId: String, peerDeviceId: String) -> Unit,
 ) {
 
@@ -56,16 +57,26 @@ class SyncServer(
     }
 
     private suspend fun handleHello(call: ApplicationCall) {
-        val session = authenticate<HelloRequest>(call) ?: return
+        val session = authenticate<HelloRequest>(call, allowKicked = true) ?: return
         val response = HelloResponse(identity.deviceId, identity.deviceName, System.currentTimeMillis(), engine.cursors(session.group.id))
         rememberPeer(session.group.id, session.request.deviceId, call.request.origin.remoteAddress, session.request.listenPort, synced = false)
         call.respondText(session.crypto.encrypt(json.encodeToString(response)))
     }
 
     private suspend fun handleSync(call: ApplicationCall) {
-        val session = authenticate<SyncRequest>(call) ?: return
+        val session = authenticate<SyncRequest>(call, allowKicked = true) ?: return
         val request = session.request
-        engine.applyRemote(session.group.id, request.changes)
+        val groupId = session.group.id
+        val rejoin = request.changes.firstOrNull { it.isSelfIntroductionOf(request.deviceId) }
+        if (session.callerKicked) {
+            if (rejoin == null) {
+                call.respond(HttpStatusCode.Forbidden)
+                return
+            }
+            readmitDevice(groupId, request.deviceId, json.decodeFromString<DevicePayload>(rejoin.payload).name)
+        }
+        val kicked = db.deviceDao().kickedDeviceIds(groupId).toSet()
+        engine.applyRemote(groupId, request.changes.filter { it.originDevice !in kicked })
         val missing = engine.changesSince(session.group.id, request.cursors)
         val response = SyncResponse(identity.deviceId, identity.deviceName, System.currentTimeMillis(), missing)
         rememberPeer(session.group.id, request.deviceId, call.request.origin.remoteAddress, request.listenPort, synced = true)
@@ -74,10 +85,10 @@ class SyncServer(
     }
 
     /**
-     * Decrypts the request with the group secret and checks the caller is not a kicked member. Responds with an error
-     * and returns null when the request must not be served.
+     * Decrypts the request with the group secret and, unless [allowKicked], rejects kicked members. Responds with an
+     * error and returns null when the request must not be served.
      */
-    private suspend inline fun <reified T : Any> authenticate(call: ApplicationCall): Session<T>? {
+    private suspend inline fun <reified T : Any> authenticate(call: ApplicationCall, allowKicked: Boolean = false): Session<T>? {
         val groupId = call.parameters["groupId"]
         val group = groupId?.let { db.groupDao().get(it) }
         var session: Session<T>? = null
@@ -92,11 +103,11 @@ class SyncServer(
             } else {
                 val callerId = callerIdOf(request)
                 val sentAt = sentAtOf(request)
-                val membership = db.deviceDao().get(group.id, callerId)
+                val callerKicked = db.deviceDao().get(group.id, callerId)?.deleted == true
                 when {
                     abs(System.currentTimeMillis() - sentAt) > MAX_CLOCK_SKEW_MILLIS -> call.respond(HttpStatusCode.Unauthorized)
-                    membership != null && membership.deleted -> call.respond(HttpStatusCode.Forbidden)
-                    else -> session = Session(group, crypto, request)
+                    callerKicked && !allowKicked -> call.respond(HttpStatusCode.Forbidden)
+                    else -> session = Session(group, crypto, request, callerKicked)
                 }
             }
         }
@@ -129,7 +140,10 @@ class SyncServer(
         )
     }
 
-    private class Session<T>(val group: GroupEntity, val crypto: GroupCrypto, val request: T)
+    private fun ChangeDto.isSelfIntroductionOf(deviceId: String): Boolean =
+        entityType == EntityType.DEVICE.name && entityId == deviceId && originDevice == deviceId
+
+    private class Session<T>(val group: GroupEntity, val crypto: GroupCrypto, val request: T, val callerKicked: Boolean)
 
     private companion object {
         const val MAX_CLOCK_SKEW_MILLIS = 5 * 60 * 1000L

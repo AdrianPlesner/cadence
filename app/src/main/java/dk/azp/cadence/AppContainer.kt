@@ -34,7 +34,9 @@ class AppContainer(context: Context) {
     val groupRepository = GroupRepository(database, identity, engine)
     val taskRepository = TaskRepository(database, engine)
 
-    private val syncServer = SyncServer(database, identity, engine, json) { _, _ -> }
+    private val syncServer = SyncServer(database, identity, engine, json, readmitDevice = { groupId, deviceId, name ->
+        groupRepository.readmitDevice(groupId, deviceId, name)
+    }) { _, _ -> }
     private val syncClient = SyncClient(identity, engine, json) { syncServer.port }
 
     val syncManager = SyncManager(context, appScope, database, identity, syncServer, syncClient)

@@ -18,7 +18,10 @@ data class GroupEntity(
     val updatedHlc: String,
 )
 
-/** Membership of a device in a group. A kicked device is a tombstoned row. */
+/**
+ * Membership of a device in a group. A kicked device is a tombstoned row. [name] and [deleted] merge independently:
+ * a device may rename itself, but only another member can change whether it belongs to the group.
+ */
 @Entity(tableName = "devices", primaryKeys = ["groupId", "id"])
 data class DeviceEntity(
     val id: String,
@@ -26,6 +29,7 @@ data class DeviceEntity(
     val name: String,
     val updatedHlc: String,
     val deleted: Boolean,
+    val deletedHlc: String,
 )
 
 @Entity(tableName = "categories", indices = [Index("groupId")])

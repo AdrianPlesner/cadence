@@ -102,14 +102,29 @@ class ChangeEngine(
         }
     }
 
+    /**
+     * Name and membership merge as separate fields. A device's own writes never change its membership, so a kicked
+     * device cannot readmit itself by renaming, and a kick is never lost to a concurrent self-edit.
+     */
     private suspend fun applyDevice(change: ChangeEntity) {
+        val payload = json.decodeFromString<DevicePayload>(change.payload)
         val existing = db.deviceDao().get(change.groupId, change.entityId)
-        if (existing == null || Hlc.isNewer(change.hlc, existing.updatedHlc)) {
-            val payload = json.decodeFromString<DevicePayload>(change.payload)
-            db.deviceDao().upsert(DeviceEntity(change.entityId, change.groupId, payload.name, change.hlc, payload.deleted))
-            if (change.entityId == identity.deviceId) {
-                db.groupDao().setKicked(change.groupId, payload.deleted)
-            }
+        val selfWrite = change.originDevice == change.entityId
+        val merged = if (existing == null) {
+            DeviceEntity(change.entityId, change.groupId, payload.name, change.hlc, deleted = payload.deleted && !selfWrite, deletedHlc = change.hlc)
+        } else {
+            val nameIsNewer = Hlc.isNewer(change.hlc, existing.updatedHlc)
+            val membershipIsNewer = !selfWrite && Hlc.isNewer(change.hlc, existing.deletedHlc)
+            existing.copy(
+                name = if (nameIsNewer) payload.name else existing.name,
+                updatedHlc = if (nameIsNewer) change.hlc else existing.updatedHlc,
+                deleted = if (membershipIsNewer) payload.deleted else existing.deleted,
+                deletedHlc = if (membershipIsNewer) change.hlc else existing.deletedHlc,
+            )
+        }
+        db.deviceDao().upsert(merged)
+        if (change.entityId == identity.deviceId) {
+            db.groupDao().setKicked(change.groupId, merged.deleted)
         }
     }
 

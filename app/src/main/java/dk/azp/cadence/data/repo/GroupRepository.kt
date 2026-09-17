@@ -37,7 +37,10 @@ class GroupRepository(
         return groupId
     }
 
-    /** Creates the group locally from an invite and announces this device as a member. Idempotent for known groups. */
+    /**
+     * Creates the group locally from an invite and announces this device as a member. A previously kicked device is
+     * readmitted by the peer it syncs with next, not by this local write. Idempotent for known groups.
+     */
     suspend fun joinGroup(invite: Invite): GroupEntity {
         val existing = db.groupDao().get(invite.groupId)
         if (existing == null) {
@@ -47,6 +50,11 @@ class GroupRepository(
         }
         engine.record(invite.groupId, EntityType.DEVICE, identity.deviceId, DevicePayload(identity.deviceName))
         return checkNotNull(db.groupDao().get(invite.groupId))
+    }
+
+    /** Called by the sync server when a kicked device presents itself again with a fresh invite. */
+    suspend fun readmitDevice(groupId: String, deviceId: String, name: String) {
+        engine.record(groupId, EntityType.DEVICE, deviceId, DevicePayload(name))
     }
 
     suspend fun renameGroup(groupId: String, name: String) {
