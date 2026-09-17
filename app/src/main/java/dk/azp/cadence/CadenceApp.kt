@@ -5,6 +5,8 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import dk.azp.cadence.data.reminders.DueReminderWorker
+import dk.azp.cadence.data.sync.BackgroundSyncWorker
+import dk.azp.cadence.data.sync.SyncManager
 
 class CadenceApp : Application() {
 
@@ -16,10 +18,11 @@ class CadenceApp : Application() {
         container = AppContainer(this)
         container.dueReminders.ensureChannel()
         DueReminderWorker.schedule(this)
+        BackgroundSyncWorker.schedule(this)
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
-            override fun onStart(owner: LifecycleOwner) = container.syncManager.start()
+            override fun onStart(owner: LifecycleOwner) = container.syncManager.acquire(SyncManager.HOLDER_FOREGROUND)
 
-            override fun onStop(owner: LifecycleOwner) = container.syncManager.stop()
+            override fun onStop(owner: LifecycleOwner) = container.syncManager.release(SyncManager.HOLDER_FOREGROUND)
         })
     }
 }

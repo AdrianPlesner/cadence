@@ -285,7 +285,7 @@ private fun SyncSection(status: SyncManager.Status, onSyncNow: () -> Unit) {
             }
         }
         Text(
-            status.lastMessage ?: if (status.running) "Looking for other devices on this network." else "Sync is paused while the app is in the background.",
+            status.lastMessage ?: if (status.running) "Looking for other devices on this network." else "In the background the app syncs about every 15 minutes.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
