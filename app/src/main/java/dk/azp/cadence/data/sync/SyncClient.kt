@@ -28,12 +28,13 @@ class SyncClient(
 
     class Result(val peerDeviceId: String, val peerDeviceName: String, val sent: Int, val received: Int)
 
-    class PeerRejectedException(status: HttpStatusCode) : Exception("Peer answered ${status.value}")
+    class PeerRejectedException(val status: HttpStatusCode) : Exception(describe(status))
 
     /** Runs a full two-leg exchange with the peer at host:port for one group. */
     suspend fun sync(group: GroupEntity, host: String, port: Int): Result {
         val crypto = GroupCrypto(group.secret)
-        val base = "http://$host:$port/groups/${group.id}"
+        val base = "http://${bracketed(host)}:$port/groups/${group.id}"
+
         val hello = HelloRequest(identity.deviceId, identity.deviceName, listenPort(), System.currentTimeMillis())
         val helloResponse = exchange<HelloResponse>("$base/hello", crypto, json.encodeToString(hello))
         val outgoing = engine.changesSince(group.id, helloResponse.cursors)
@@ -48,6 +49,17 @@ class SyncClient(
         val syncResponse = exchange<SyncResponse>("$base/sync", crypto, json.encodeToString(request))
         val received = engine.applyRemote(group.id, syncResponse.changes)
         return Result(syncResponse.deviceId, syncResponse.deviceName, outgoing.size, received)
+    }
+
+    private companion object {
+        fun bracketed(host: String): String = if (':' in host) "[$host]" else host
+
+        fun describe(status: HttpStatusCode): String = when (status) {
+            HttpStatusCode.Unauthorized -> "Peer rejected the request; check that both devices have the correct time"
+            HttpStatusCode.Forbidden -> "This device has been removed from the group"
+            HttpStatusCode.NotFound -> "Peer does not have this group"
+            else -> "Peer answered ${status.value}"
+        }
     }
 
     private suspend inline fun <reified T> exchange(url: String, crypto: GroupCrypto, body: String): T {

@@ -1,5 +1,6 @@
 package dk.azp.cadence.data.sync
 
+import android.util.Log
 import androidx.room.withTransaction
 import dk.azp.cadence.data.DeviceIdentity
 import dk.azp.cadence.data.db.CadenceDatabase
@@ -11,6 +12,7 @@ import dk.azp.cadence.data.db.TaskEntity
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
+import kotlin.math.max
 
 /**
  * The single write path for synced data. Every local edit becomes a change-log row that is applied to the live tables,
@@ -30,7 +32,8 @@ class ChangeEngine(
     suspend fun record(groupId: String, type: EntityType, entityId: String, payload: Any) {
         writeLock.withLock {
             db.withTransaction {
-                val seq = db.changeDao().maxSeq(identity.deviceId) + 1
+                val seq = max(identity.lastSeq, db.changeDao().maxSeq(identity.deviceId)) + 1
+                identity.lastSeq = seq
                 val change = ChangeEntity(
                     originDevice = identity.deviceId,
                     seq = seq,
@@ -56,9 +59,12 @@ class ChangeEngine(
                     val change = dto.toEntity(groupId)
                     val inserted = db.changeDao().insert(change) != -1L
                     if (inserted) {
-                        hlc.observe(change.hlc)
-                        applyToLiveTables(change)
                         applied++
+                        // A change this version cannot interpret is still stored and relayed; it must not block the batch.
+                        runCatching {
+                            hlc.observe(change.hlc)
+                            applyToLiveTables(change)
+                        }.onFailure { Log.w(TAG, "Could not apply ${change.entityType} ${change.entityId} from ${change.originDevice}", it) }
                     }
                 }
             }
@@ -142,6 +148,10 @@ class ChangeEngine(
                 CompletionEntity(change.entityId, change.groupId, payload.taskId, payload.doneDate, change.hlc, payload.deleted)
             )
         }
+    }
+
+    private companion object {
+        const val TAG = "ChangeEngine"
     }
 
     private fun encode(type: EntityType, payload: Any): String = when (type) {

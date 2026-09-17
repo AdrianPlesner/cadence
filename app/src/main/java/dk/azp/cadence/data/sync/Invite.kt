@@ -31,7 +31,9 @@ data class Invite(
     companion object {
         private const val PREFIX = "cadence://join?"
 
-        fun parse(text: String): Invite? {
+        fun parse(text: String): Invite? = runCatching { parseStrict(text) }.getOrNull()
+
+        private fun parseStrict(text: String): Invite? {
             val trimmed = text.trim()
             val query = if (trimmed.startsWith(PREFIX)) trimmed.removePrefix(PREFIX) else return null
             val params = query.split('&').mapNotNull { part ->

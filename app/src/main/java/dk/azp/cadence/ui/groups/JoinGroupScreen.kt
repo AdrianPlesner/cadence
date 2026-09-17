@@ -55,7 +55,7 @@ class JoinGroupViewModel(
         } else {
             viewModelScope.launch {
                 val group = groupRepository.joinGroup(invite)
-                launch { syncManager.syncWithInviteHost(group, invite) }
+                syncManager.syncWithInviteHost(group, invite)
                 onJoined(group.id)
             }
         }

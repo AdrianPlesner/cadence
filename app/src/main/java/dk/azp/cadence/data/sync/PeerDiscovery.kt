@@ -4,7 +4,10 @@ import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
+import android.os.Build
 import android.util.Log
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.util.ArrayDeque
 
 /** Advertises this device's sync server over DNS-SD and reports other Cadence devices on the network. */
@@ -123,14 +126,24 @@ class PeerDiscovery(
 
             override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
                 val deviceId = serviceInfo.attributes[ATTRIBUTE_DEVICE_ID]?.toString(Charsets.UTF_8)
-                @Suppress("DEPRECATION")
-                val host = serviceInfo.host?.hostAddress
+                val host = preferredAddress(serviceInfo)?.hostAddress
                 if (deviceId != null && host != null && deviceId != ownDeviceId) {
                     onPeerFound(Peer(deviceId, host, serviceInfo.port))
                 }
                 finishResolve()
             }
         })
+    }
+
+    /** IPv4 when available: link-local IPv6 addresses carry a scope suffix that does not survive a URL. */
+    private fun preferredAddress(serviceInfo: NsdServiceInfo): InetAddress? {
+        val candidates: List<InetAddress> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            serviceInfo.hostAddresses
+        } else {
+            @Suppress("DEPRECATION")
+            listOfNotNull(serviceInfo.host)
+        }
+        return candidates.firstOrNull { it is Inet4Address } ?: candidates.firstOrNull()
     }
 
     private fun finishResolve() {

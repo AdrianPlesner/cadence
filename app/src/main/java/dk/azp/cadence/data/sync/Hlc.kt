@@ -1,5 +1,6 @@
 package dk.azp.cadence.data.sync
 
+import java.util.Locale
 import kotlin.math.max
 
 /**
@@ -54,7 +55,7 @@ class Hlc(
 
     companion object {
         fun format(physical: Long, counter: Int, deviceId: String): String =
-            String.format("%013d-%06x-%s", physical, counter, deviceId)
+            String.format(Locale.ROOT, "%013d-%06x-%s", physical, counter, deviceId)
 
         fun physicalOf(stamp: String): Long = stamp.substring(0, 13).toLong()
 

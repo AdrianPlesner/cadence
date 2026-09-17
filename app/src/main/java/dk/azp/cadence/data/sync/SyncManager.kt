@@ -39,23 +39,40 @@ class SyncManager(
 
     private var discovery: PeerDiscovery? = null
     private val peerLocks = mutableMapOf<String, Mutex>()
+    /** start() and stop() are called from the main thread in quick succession; this keeps them ordered. */
+    private val lifecycleLock = Mutex()
 
     fun start() {
         scope.launch {
-            val port = server.start()
-            listenPortFlow.value = port
-            discovery = PeerDiscovery(context, identity.deviceId) { peer -> scope.launch { syncWithPeer(peer) } }.also { it.start(port) }
-            statusFlow.update { it.copy(running = true) }
-            syncKnownPeers()
+            val started = lifecycleLock.withLock {
+                runCatching {
+                    if (discovery == null) {
+                        val port = server.start()
+                        listenPortFlow.value = port
+                        discovery = PeerDiscovery(context, identity.deviceId) { peer -> scope.launch { syncWithPeer(peer) } }.also { it.start(port) }
+                        statusFlow.update { it.copy(running = true) }
+                    }
+                }.onFailure { error ->
+                    Log.w(TAG, "Could not start sync", error)
+                    statusFlow.update { it.copy(lastMessage = "Sync could not start: ${error.message}") }
+                }
+            }
+            if (started.isSuccess) {
+                syncKnownPeers()
+            }
         }
     }
 
     fun stop() {
-        discovery?.stop()
-        discovery = null
-        server.stop()
-        listenPortFlow.value = 0
-        statusFlow.update { it.copy(running = false) }
+        scope.launch {
+            lifecycleLock.withLock {
+                discovery?.stop()
+                discovery = null
+                server.stop()
+                listenPortFlow.value = 0
+                statusFlow.update { it.copy(running = false) }
+            }
+        }
     }
 
     fun localAddress(): String? = NetworkAddress.localIpv4(context)
@@ -66,18 +83,19 @@ class SyncManager(
         scope.launch { syncKnownPeers() }
     }
 
-    /** First sync after joining, against the address embedded in the invite. */
-    suspend fun syncWithInviteHost(group: GroupEntity, invite: Invite) {
+    /** First sync after joining, against the address embedded in the invite. Runs independently of the caller. */
+    fun syncWithInviteHost(group: GroupEntity, invite: Invite) {
         val host = invite.host
         val port = invite.port
         if (host != null && port != null) {
-            syncGroupWithPeer(group, invite.hostDeviceId, host, port)
+            scope.launch { syncGroupWithPeer(group, invite.hostDeviceId, host, port) }
         }
     }
 
     private suspend fun syncKnownPeers() {
         val jobs = mutableListOf<Job>()
-        for (group in db.groupDao().getActive()) {
+        val groups = runCatching { db.groupDao().getActive() }.getOrElse { emptyList() }
+        for (group in groups) {
             for (peer in db.peerSyncDao().knownAddresses(group.id)) {
                 val host = peer.lastHost
                 val port = peer.lastPort

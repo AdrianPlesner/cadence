@@ -16,6 +16,11 @@ class DeviceIdentity(context: Context) {
         get() = prefs.getString(KEY_DEVICE_NAME, null) ?: defaultDeviceName()
         set(value) = prefs.edit().putString(KEY_DEVICE_NAME, value).apply()
 
+    /** Highest change sequence number this device has ever issued. Kept here so it survives deleting change rows. */
+    var lastSeq: Long
+        get() = prefs.getLong(KEY_LAST_SEQ, 0L)
+        set(value) = prefs.edit().putLong(KEY_LAST_SEQ, value).apply()
+
     fun loadHlcPhysical(): Long = prefs.getLong(KEY_HLC_PHYSICAL, 0L)
 
     fun loadHlcCounter(): Int = prefs.getInt(KEY_HLC_COUNTER, 0)
@@ -34,6 +39,7 @@ class DeviceIdentity(context: Context) {
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_DEVICE_NAME = "device_name"
         const val KEY_HLC_PHYSICAL = "hlc_physical"
+        const val KEY_LAST_SEQ = "last_seq"
         const val KEY_HLC_COUNTER = "hlc_counter"
     }
 }
