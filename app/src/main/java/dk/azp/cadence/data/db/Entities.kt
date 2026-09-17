@@ -45,6 +45,8 @@ data class TaskEntity(
     val cadenceDays: Int?,
     /** Comma separated category ids; see [categoryIdList]. */
     val categoryIds: String,
+    /** Whether every device in the group posts a notification once the cadence countdown reaches zero. */
+    val notifyWhenDue: Boolean,
     val updatedHlc: String,
     val deleted: Boolean,
 ) {
@@ -97,6 +99,12 @@ data class GroupSummary(
 data class TaskWithLastDone(
     @Embedded val task: TaskEntity,
     val lastDone: Long?,
+)
+
+data class ReminderTask(
+    @Embedded val task: TaskEntity,
+    val lastDone: Long?,
+    val groupName: String,
 )
 
 data class DeviceWithSync(

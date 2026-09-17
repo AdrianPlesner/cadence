@@ -14,6 +14,12 @@ import kotlinx.coroutines.flow.Flow
 import java.time.LocalDate
 import java.util.UUID
 
+/** The user-editable part of a task. */
+data class TaskEdit(val name: String, val cadenceDays: Int?, val categoryIds: List<String>, val notifyWhenDue: Boolean) {
+
+    fun toPayload(): TaskPayload = TaskPayload(name, cadenceDays, categoryIds, notifyWhenDue = notifyWhenDue && cadenceDays != null)
+}
+
 class TaskRepository(
     private val db: CadenceDatabase,
     private val engine: ChangeEngine,
@@ -27,20 +33,21 @@ class TaskRepository(
 
     fun observeCompletions(taskId: String): Flow<List<CompletionEntity>> = db.completionDao().observeForTask(taskId)
 
-    suspend fun addTask(groupId: String, name: String, cadenceDays: Int?, categoryIds: List<String>): String {
+    suspend fun addTask(groupId: String, edit: TaskEdit): String {
         val taskId = UUID.randomUUID().toString()
-        engine.record(groupId, EntityType.TASK, taskId, TaskPayload(name, cadenceDays, categoryIds))
+        engine.record(groupId, EntityType.TASK, taskId, edit.toPayload())
         return taskId
     }
 
-    suspend fun updateTask(taskId: String, name: String, cadenceDays: Int?, categoryIds: List<String>) {
+    suspend fun updateTask(taskId: String, edit: TaskEdit) {
         val task = db.taskDao().get(taskId) ?: return
-        engine.record(task.groupId, EntityType.TASK, taskId, TaskPayload(name, cadenceDays, categoryIds))
+        engine.record(task.groupId, EntityType.TASK, taskId, edit.toPayload())
     }
 
     suspend fun deleteTask(taskId: String) {
         val task = db.taskDao().get(taskId) ?: return
-        engine.record(task.groupId, EntityType.TASK, taskId, TaskPayload(task.name, task.cadenceDays, task.categoryIdList(), deleted = true))
+        val payload = TaskPayload(task.name, task.cadenceDays, task.categoryIdList(), task.notifyWhenDue, deleted = true)
+        engine.record(task.groupId, EntityType.TASK, taskId, payload)
     }
 
     suspend fun addCategory(groupId: String, name: String): String {

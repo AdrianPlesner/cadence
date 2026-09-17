@@ -18,6 +18,7 @@ data class TaskPayload(
     val name: String,
     val cadenceDays: Int? = null,
     val categoryIds: List<String> = emptyList(),
+    val notifyWhenDue: Boolean = false,
     val deleted: Boolean = false,
 )
 

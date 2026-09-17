@@ -1,6 +1,7 @@
 package dk.azp.cadence.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -28,8 +29,15 @@ data class TaskDetailRoute(val groupId: String, val taskId: String)
 data class GroupOverviewRoute(val groupId: String)
 
 @Composable
-fun CadenceNavHost() {
+fun CadenceNavHost(requestedTask: TaskDetailRoute? = null, onRequestedTaskShown: () -> Unit = {}) {
     val navController = rememberNavController()
+    LaunchedEffect(requestedTask) {
+        if (requestedTask != null) {
+            navController.navigate(GroupTasksRoute(requestedTask.groupId)) { popUpTo(GroupListRoute) }
+            navController.navigate(requestedTask)
+            onRequestedTaskShown()
+        }
+    }
     NavHost(navController = navController, startDestination = GroupListRoute) {
         composable<GroupListRoute> {
             GroupListScreen(

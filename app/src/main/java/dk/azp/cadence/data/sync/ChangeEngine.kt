@@ -21,6 +21,8 @@ class ChangeEngine(
     private val identity: DeviceIdentity,
     private val hlc: Hlc,
     private val json: Json,
+    /** Called after any batch of changes, local or remote, has been applied. */
+    private val onChanged: () -> Unit = {},
 ) {
 
     private val writeLock = Mutex()
@@ -42,6 +44,7 @@ class ChangeEngine(
                 applyToLiveTables(change)
             }
         }
+        onChanged()
     }
 
     /** Applies changes received from a peer. Returns how many were new to this device. */
@@ -59,6 +62,9 @@ class ChangeEngine(
                     }
                 }
             }
+        }
+        if (applied > 0) {
+            onChanged()
         }
         return applied
     }
@@ -120,6 +126,7 @@ class ChangeEngine(
                     name = payload.name,
                     cadenceDays = payload.cadenceDays,
                     categoryIds = payload.categoryIds.joinToString(","),
+                    notifyWhenDue = payload.notifyWhenDue,
                     updatedHlc = change.hlc,
                     deleted = payload.deleted,
                 )

@@ -97,6 +97,15 @@ interface TaskDao {
     @Query("SELECT * FROM tasks WHERE id = :id")
     fun observe(id: String): Flow<TaskEntity?>
 
+    @Query(
+        """
+        SELECT t.*, (SELECT MAX(c.doneDate) FROM completions c WHERE c.taskId = t.id AND c.deleted = 0) AS lastDone, g.name AS groupName
+        FROM tasks t JOIN groups g ON g.id = t.groupId
+        WHERE t.deleted = 0 AND t.notifyWhenDue = 1 AND t.cadenceDays IS NOT NULL AND g.kicked = 0
+        """
+    )
+    suspend fun remindable(): List<ReminderTask>
+
     @Query("SELECT * FROM tasks WHERE id = :id")
     suspend fun get(id: String): TaskEntity?
 

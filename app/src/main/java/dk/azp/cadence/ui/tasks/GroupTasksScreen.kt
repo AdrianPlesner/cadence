@@ -45,6 +45,7 @@ import androidx.lifecycle.viewModelScope
 import dk.azp.cadence.data.db.CategoryEntity
 import dk.azp.cadence.data.db.GroupEntity
 import dk.azp.cadence.data.repo.GroupRepository
+import dk.azp.cadence.data.repo.TaskEdit
 import dk.azp.cadence.data.repo.TaskRepository
 import dk.azp.cadence.ui.Formatting
 import dk.azp.cadence.ui.appViewModel
@@ -102,8 +103,8 @@ class GroupTasksViewModel(
         viewModelScope.launch { taskRepository.markDone(taskId, date) }
     }
 
-    fun addTask(name: String, cadenceDays: Int?, categoryIds: List<String>) {
-        viewModelScope.launch { taskRepository.addTask(groupId, name, cadenceDays, categoryIds) }
+    fun addTask(edit: TaskEdit) {
+        viewModelScope.launch { taskRepository.addTask(groupId, edit) }
     }
 
     suspend fun addCategory(name: String): String = taskRepository.addCategory(groupId, name)
@@ -164,7 +165,7 @@ fun GroupTasksScreen(groupId: String, onBack: () -> Unit, onOpenTask: (String) -
             categories = categories,
             onCreateCategory = viewModel::addCategory,
             onDismiss = { adding = false },
-            onSave = { name, cadenceDays, categoryIds -> adding = false; viewModel.addTask(name, cadenceDays, categoryIds) },
+            onSave = { edit -> adding = false; viewModel.addTask(edit) },
         )
     }
     pickingDateFor?.let { taskId ->

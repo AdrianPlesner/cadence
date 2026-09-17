@@ -40,6 +40,7 @@ import dk.azp.cadence.data.db.CategoryEntity
 import dk.azp.cadence.data.db.CompletionEntity
 import dk.azp.cadence.data.db.TaskEntity
 import dk.azp.cadence.data.db.TaskWithLastDone
+import dk.azp.cadence.data.repo.TaskEdit
 import dk.azp.cadence.data.repo.TaskRepository
 import dk.azp.cadence.ui.Formatting
 import dk.azp.cadence.ui.appViewModel
@@ -80,8 +81,8 @@ class TaskDetailViewModel(
         viewModelScope.launch { taskRepository.deleteCompletion(completionId) }
     }
 
-    fun update(name: String, cadenceDays: Int?, categoryIds: List<String>) {
-        viewModelScope.launch { taskRepository.updateTask(taskId, name, cadenceDays, categoryIds) }
+    fun update(edit: TaskEdit) {
+        viewModelScope.launch { taskRepository.updateTask(taskId, edit) }
     }
 
     fun delete(onDeleted: () -> Unit) {
@@ -160,7 +161,7 @@ fun TaskDetailScreen(groupId: String, taskId: String, onBack: () -> Unit) {
                 categories = categories,
                 onCreateCategory = viewModel::addCategory,
                 onDismiss = { editing = false },
-                onSave = { name, cadenceDays, categoryIds -> editing = false; viewModel.update(name, cadenceDays, categoryIds) },
+                onSave = { edit -> editing = false; viewModel.update(edit) },
             )
         }
     }
@@ -197,6 +198,11 @@ private fun SummaryCard(row: TaskRow) {
                     Text("·")
                     DueLabel(row)
                 }
+                Text(
+                    if (row.task.notifyWhenDue) "Reminder when due is on" else "Reminder when due is off",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             if (row.categoryNames.isNotEmpty()) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -1,5 +1,9 @@
 package dk.azp.cadence.ui.tasks
 
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -18,6 +22,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SelectableDates
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
@@ -34,6 +39,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import dk.azp.cadence.data.db.CategoryEntity
 import dk.azp.cadence.data.db.TaskEntity
+import dk.azp.cadence.data.repo.TaskEdit
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
@@ -46,10 +52,12 @@ fun TaskEditorDialog(
     categories: List<CategoryEntity>,
     onCreateCategory: suspend (String) -> String,
     onDismiss: () -> Unit,
-    onSave: (name: String, cadenceDays: Int?, categoryIds: List<String>) -> Unit,
+    onSave: (TaskEdit) -> Unit,
 ) {
     var name by rememberSaveable { mutableStateOf(initial?.name ?: "") }
     var cadence by rememberSaveable { mutableStateOf(initial?.cadenceDays?.toString() ?: "") }
+    var notify by rememberSaveable { mutableStateOf(initial?.notifyWhenDue ?: false) }
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     var selected by rememberSaveable { mutableStateOf(initial?.categoryIdList() ?: emptyList()) }
     var newCategory by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
@@ -70,6 +78,19 @@ fun TaskEditorDialog(
                     isError = !cadenceValid,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                    Text("Remind when due", modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = notify && cadence.isNotBlank(),
+                        enabled = cadence.isNotBlank(),
+                        onCheckedChange = { enabled ->
+                            notify = enabled
+                            if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                        },
+                    )
+                }
                 if (categories.isNotEmpty()) {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         categories.forEach { category ->
@@ -103,7 +124,7 @@ fun TaskEditorDialog(
         confirmButton = {
             TextButton(
                 enabled = name.isNotBlank() && cadenceValid,
-                onClick = { onSave(name.trim(), cadence.toIntOrNull(), selected) },
+                onClick = { onSave(TaskEdit(name.trim(), cadence.toIntOrNull(), selected, notify)) },
             ) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
