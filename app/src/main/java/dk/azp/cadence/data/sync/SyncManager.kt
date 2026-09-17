@@ -9,6 +9,8 @@ import dk.azp.cadence.data.db.PeerSyncEntity
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -16,10 +18,12 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Duration
 
 /**
- * Runs the sync server while the app is in the foreground, finds peers on the LAN and exchanges changes with every peer
- * that is a member of one of this device's groups.
+ * Runs the sync server, finds peers on the LAN and exchanges changes with every peer that is a member of one of this
+ * device's groups. The engine is on while at least one holder wants it: the foreground UI, or a background sync window.
  */
 class SyncManager(
     private val context: Context,
@@ -40,33 +44,62 @@ class SyncManager(
 
     private var discovery: PeerDiscovery? = null
     private val peerLocks = mutableMapOf<String, Mutex>()
-    /** start() and stop() are called from the main thread in quick succession; this keeps them ordered. */
+    /** Who currently wants the engine running; guarded by [lifecycleLock], which also orders start and stop. */
+    private val holders = mutableSetOf<String>()
     private val lifecycleLock = Mutex()
 
-    fun start() {
-        scope.launch {
-            val started = lifecycleLock.withLock {
-                runCatching {
-                    if (discovery == null) {
-                        val port = server.start()
-                        listenPortFlow.value = port
-                        discovery = PeerDiscovery(context, identity.deviceId) { peer -> scope.launch { syncWithPeer(peer) } }.also { it.start(port) }
-                        statusFlow.update { it.copy(running = true) }
-                    }
-                }.onFailure { error ->
-                    Log.w(TAG, "Could not start sync", error)
-                    statusFlow.update { it.copy(lastMessage = "Sync could not start: ${error.message}") }
-                }
-            }
-            if (started.isSuccess) {
+    /** Keeps the engine running until the same holder calls [release]. */
+    fun acquire(holder: String) {
+        scope.launch { acquireNow(holder) }
+    }
+
+    fun release(holder: String) {
+        scope.launch { releaseNow(holder) }
+    }
+
+    /**
+     * One background sync pass: brings the engine up, contacts every peer address seen before, leaves the engine running
+     * for [window] so discovered peers can be synced too, then hands the engine back. Returns a short status line.
+     */
+    suspend fun runBackgroundWindow(window: Duration): String {
+        val started = acquireNow(HOLDER_BACKGROUND)
+        return try {
+            if (started) {
                 syncKnownPeers()
+                delay(window)
+                withTimeoutOrNull(window) { statusFlow.first { it.activeSyncs == 0 } }
+                statusFlow.value.lastMessage ?: "No peers reachable"
+            } else {
+                "Sync engine could not start"
             }
+        } finally {
+            releaseNow(HOLDER_BACKGROUND)
         }
     }
 
-    fun stop() {
-        scope.launch {
-            lifecycleLock.withLock {
+    private suspend fun acquireNow(holder: String): Boolean = lifecycleLock.withLock {
+        holders += holder
+        val started = runCatching {
+            if (discovery == null) {
+                val port = server.start()
+                listenPortFlow.value = port
+                discovery = PeerDiscovery(context, identity.deviceId) { peer -> scope.launch { syncWithPeer(peer) } }.also { it.start(port) }
+                statusFlow.update { it.copy(running = true) }
+            }
+        }.onFailure { error ->
+            Log.w(TAG, "Could not start sync", error)
+            statusFlow.update { it.copy(lastMessage = "Sync could not start: ${error.message}") }
+        }
+        if (started.isSuccess && holder == HOLDER_FOREGROUND) {
+            scope.launch { syncKnownPeers() }
+        }
+        started.isSuccess
+    }
+
+    private suspend fun releaseNow(holder: String) {
+        lifecycleLock.withLock {
+            holders -= holder
+            if (holders.isEmpty()) {
                 discovery?.stop()
                 discovery = null
                 server.stop()
@@ -137,7 +170,9 @@ class SyncManager(
         }
     }
 
-    private companion object {
-        const val TAG = "SyncManager"
+    companion object {
+        const val HOLDER_FOREGROUND = "foreground"
+        const val HOLDER_BACKGROUND = "background"
+        private const val TAG = "SyncManager"
     }
 }
