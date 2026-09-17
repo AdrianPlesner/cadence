@@ -11,6 +11,9 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
  * Registers a system-level BLE scan for Cadence beacons. The scan outlives the app process: matching advertisements
@@ -33,8 +36,16 @@ object BleWake {
     fun hasPermissions(context: Context): Boolean =
         requiredPermissions.all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
 
-    /** Idempotent: re-registering with the same PendingIntent replaces the previous scan. */
+    /**
+     * Idempotent: re-registering with the same PendingIntent replaces the previous scan. Bluetooth calls go through the
+     * Bluetooth service and can stall, so the work is kept off the calling thread.
+     */
     fun register(context: Context) {
+        val appContext = context.applicationContext
+        CoroutineScope(Dispatchers.IO).launch { registerBlocking(appContext) }
+    }
+
+    private fun registerBlocking(context: Context) {
         if (!isSupported(context) || !hasPermissions(context)) {
             return
         }
