@@ -30,6 +30,13 @@ there is no server.
 - Leaving a group is local; other devices keep listing the device until it is removed.
 - Reminders fire at 09:00 local time and the setting is shared by the whole group.
 
+## Releases
+
+Publishing a GitHub release triggers the Release APK workflow, which attaches `cadence-<tag>.apk` signed with the
+release key. Its certificate fingerprint, for verifying a download:
+
+    SHA-256: 6F:5A:D5:95:B7:79:73:F8:CE:6C:1C:B1:B8:8A:23:76:D0:F8:A3:0F:64:22:50:C8:70:8D:29:66:96:A2:4D:59
+
 ## Building
 
     ./gradlew :app:assembleDebug
