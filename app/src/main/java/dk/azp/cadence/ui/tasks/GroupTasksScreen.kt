@@ -32,6 +32,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
@@ -86,7 +92,13 @@ class GroupTasksViewModel(
     private val groupId: String,
     groupRepository: GroupRepository,
     private val taskRepository: TaskRepository,
+    private val preferences: TaskListPreferences,
 ) : ViewModel() {
+
+    private val sortFlow = MutableStateFlow(preferences.sort(groupId))
+    val sort: StateFlow<TaskSort> = sortFlow
+
+    private val collapsedFlow = MutableStateFlow(preferences.collapsedSections(groupId))
 
     private val selectedCategoryFlow = MutableStateFlow<String?>(null)
     val selectedCategory: StateFlow<String?> = selectedCategoryFlow
@@ -111,22 +123,23 @@ class GroupTasksViewModel(
     val taskList: StateFlow<TaskList?> = combine(
         taskRepository.observeTasks(groupId),
         categories,
-        selectedCategoryFlow,
-        queryFlow,
+        combine(selectedCategoryFlow, queryFlow, ::Pair),
+        combine(sortFlow, collapsedFlow, ::Pair),
         today,
-    ) { tasks, categoryList, selected, query, date ->
+    ) { tasks, categoryList, (selected, query), (sort, collapsed), date ->
         val names = categoryList.associate { it.id to it.name }
         val inCategory = tasks
             .filter { selected == null || selected in it.task.categoryIdList() }
             .map { TaskRow.from(it, names, date) }
-        val matching = inCategory.filter { TaskSearch.matches(it, query) }.sortedWith(TaskRow.urgencyOrder)
+        val matching = inCategory.filter { TaskSearch.matches(it, query) }
         val emptyReason = when {
             matching.isNotEmpty() -> null
             tasks.isEmpty() -> EmptyReason.NO_TASKS
             inCategory.isEmpty() -> EmptyReason.NO_CATEGORY_MATCH
             else -> EmptyReason.NO_SEARCH_MATCH
         }
-        TaskList(matching, emptyReason)
+        val items = TaskListLayout.build(matching, sort, categoryList, selected, collapsed, searching = query.isNotBlank())
+        TaskList(matching, items, emptyReason)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun selectCategory(categoryId: String?) {
@@ -135,6 +148,17 @@ class GroupTasksViewModel(
 
     fun search(query: String) {
         queryFlow.value = query
+    }
+
+    fun setSort(sort: TaskSort) {
+        sortFlow.value = sort
+        preferences.setSort(groupId, sort)
+    }
+
+    fun toggleSection(sectionId: String) {
+        val collapsed = collapsedFlow.value.let { if (sectionId in it) it - sectionId else it + sectionId }
+        collapsedFlow.value = collapsed
+        preferences.setCollapsedSections(groupId, collapsed)
     }
 
     fun markDone(taskId: String, date: LocalDate) {
@@ -151,11 +175,12 @@ class GroupTasksViewModel(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GroupTasksScreen(groupId: String, onBack: () -> Unit, onOpenTask: (String) -> Unit, onOpenOverview: () -> Unit) {
-    val viewModel = appViewModel(key = "tasks-$groupId") { GroupTasksViewModel(groupId, it.groupRepository, it.taskRepository) }
+    val viewModel = appViewModel(key = "tasks-$groupId") { GroupTasksViewModel(groupId, it.groupRepository, it.taskRepository, it.taskListPreferences) }
     val group by viewModel.group.collectAsStateWithLifecycle()
     val categories by viewModel.categories.collectAsStateWithLifecycle()
     val selectedCategory by viewModel.selectedCategory.collectAsStateWithLifecycle()
     val taskList by viewModel.taskList.collectAsStateWithLifecycle()
+    val sort by viewModel.sort.collectAsStateWithLifecycle()
     val rows = taskList?.rows.orEmpty()
     var searching by rememberSaveable { mutableStateOf(false) }
     // The field's text lives here rather than round-tripping through the view model, so fast typing never loses characters.
@@ -181,6 +206,7 @@ fun GroupTasksScreen(groupId: String, onBack: () -> Unit, onOpenTask: (String) -
                     title = { Text(group?.name ?: "") },
                     navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") } },
                     actions = {
+                        SortMenu(current = sort, onSelect = viewModel::setSort)
                         IconButton(onClick = { searching = true }) { Icon(Icons.Default.Search, contentDescription = "Search tasks") }
                         IconButton(onClick = onOpenOverview) { Icon(Icons.Default.Groups, contentDescription = "Group overview") }
                     },
@@ -209,13 +235,16 @@ fun GroupTasksScreen(groupId: String, onBack: () -> Unit, onOpenTask: (String) -
                 }
             } else {
                 LazyColumn(Modifier.fillMaxSize()) {
-                    items(rows, key = { it.task.id }) { row ->
-                        TaskListRow(
-                            row = row,
-                            onClick = { onOpenTask(row.task.id) },
-                            onDoneToday = { viewModel.markDone(row.task.id, LocalDate.now()) },
-                            onDoneOnDate = { pickingDateFor = row.task.id },
-                        )
+                    items(taskList?.items.orEmpty(), key = { it.key }) { item ->
+                        when (item) {
+                            is TaskListItem.Section -> SectionHeader(item, onToggle = { viewModel.toggleSection(item.sectionId) })
+                            is TaskListItem.Task -> TaskListRow(
+                                row = item.row,
+                                onClick = { onOpenTask(item.row.task.id) },
+                                onDoneToday = { viewModel.markDone(item.row.task.id, LocalDate.now()) },
+                                onDoneOnDate = { pickingDateFor = item.row.task.id },
+                            )
+                        }
                     }
                 }
             }
@@ -241,9 +270,53 @@ fun GroupTasksScreen(groupId: String, onBack: () -> Unit, onOpenTask: (String) -
 }
 
 /** What the task list shows: the matching rows, and why it is empty when it is. */
-data class TaskList(val rows: List<TaskRow>, val emptyReason: EmptyReason?)
+data class TaskList(val rows: List<TaskRow>, val items: List<TaskListItem>, val emptyReason: EmptyReason?)
 
 enum class EmptyReason { NO_TASKS, NO_CATEGORY_MATCH, NO_SEARCH_MATCH }
+
+@Composable
+private fun SortMenu(current: TaskSort, onSelect: (TaskSort) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort tasks") }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            TaskSort.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label) },
+                    onClick = {
+                        open = false
+                        onSelect(option)
+                    },
+                    trailingIcon = { if (option == current) Icon(Icons.Default.Check, contentDescription = "Current sort") },
+                )
+            }
+        }
+    }
+}
+
+/** A category's header in the grouped list. Tapping it collapses or expands the category. */
+@Composable
+private fun SectionHeader(section: TaskListItem.Section, onToggle: () -> Unit) {
+    val action = if (section.collapsed) "Expand" else "Collapse"
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = section.collapsible, onClickLabel = "$action ${section.title}", onClick = onToggle)
+            .semantics { stateDescription = if (section.collapsed) "Collapsed" else "Expanded" }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        val arrow = if (section.collapsed) Icons.AutoMirrored.Filled.KeyboardArrowRight else Icons.Default.KeyboardArrowDown
+        val arrowTint = if (section.collapsible) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+        Icon(arrow, contentDescription = null, tint = arrowTint)
+        Text(section.title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+        if (section.overdueCount > 0) {
+            Text("${section.overdueCount} overdue", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
+        }
+        Text(section.taskCount.toString(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
 
 /** Replaces the top bar while searching; the field takes focus once, when search opens. */
 @OptIn(ExperimentalMaterial3Api::class)
