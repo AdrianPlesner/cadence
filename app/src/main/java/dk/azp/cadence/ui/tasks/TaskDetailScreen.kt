@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import dk.azp.cadence.data.TimeEstimate
 import dk.azp.cadence.data.db.CategoryEntity
 import dk.azp.cadence.data.db.CompletionEntity
 import dk.azp.cadence.data.db.TaskEntity
@@ -193,6 +194,9 @@ private fun SummaryCard(row: TaskRow) {
                 Text(Formatting.daysAgo(daysSince).replaceFirstChar(Char::uppercase), style = MaterialTheme.typography.bodyMedium)
             } else {
                 Text("Not done yet", style = MaterialTheme.typography.titleMedium)
+            }
+            row.task.estimateMinutes?.let { minutes ->
+                Text("Takes about " + TimeEstimate.format(minutes), style = MaterialTheme.typography.bodyMedium)
             }
             row.task.cadenceDays?.let { cadence ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

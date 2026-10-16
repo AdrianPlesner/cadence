@@ -21,6 +21,7 @@ there is no server.
 - Groups of tasks shared between the devices that joined the group.
 - Each task records every date it was carried out, shows the days since, and, given a repeat interval, counts down to
   the next due date. Overdue tasks are outlined in red.
+- Optional time estimate per task, typed as 20, 45m, 1h 30m or 1:30.
 - Optional categories per task, with filtering.
 - Optional reminder per task: a notification when the countdown reaches zero, with a "Mark done" action.
 - Group overview with the member devices, when each was last synced, a QR invite and the option to remove a device.

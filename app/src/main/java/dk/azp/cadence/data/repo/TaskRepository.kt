@@ -15,9 +15,16 @@ import java.time.LocalDate
 import java.util.UUID
 
 /** The user-editable part of a task. */
-data class TaskEdit(val name: String, val cadenceDays: Int?, val categoryIds: List<String>, val notifyWhenDue: Boolean) {
+data class TaskEdit(
+    val name: String,
+    val cadenceDays: Int?,
+    val categoryIds: List<String>,
+    val notifyWhenDue: Boolean,
+    val estimateMinutes: Int?,
+) {
 
-    fun toPayload(): TaskPayload = TaskPayload(name, cadenceDays, categoryIds, notifyWhenDue = notifyWhenDue && cadenceDays != null)
+    fun toPayload(): TaskPayload =
+        TaskPayload(name, cadenceDays, categoryIds, notifyWhenDue = notifyWhenDue && cadenceDays != null, estimateMinutes = estimateMinutes)
 }
 
 class TaskRepository(
@@ -46,7 +53,7 @@ class TaskRepository(
 
     suspend fun deleteTask(taskId: String) {
         val task = db.taskDao().get(taskId) ?: return
-        val payload = TaskPayload(task.name, task.cadenceDays, task.categoryIdList(), task.notifyWhenDue, deleted = true)
+        val payload = TaskPayload(task.name, task.cadenceDays, task.categoryIdList(), task.notifyWhenDue, task.estimateMinutes, deleted = true)
         engine.record(task.groupId, EntityType.TASK, taskId, payload)
     }
 

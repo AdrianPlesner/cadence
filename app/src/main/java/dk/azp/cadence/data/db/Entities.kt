@@ -51,6 +51,8 @@ data class TaskEntity(
     val categoryIds: String,
     /** Whether every device in the group posts a notification once the cadence countdown reaches zero. */
     val notifyWhenDue: Boolean,
+    /** How long carrying out the task usually takes, in minutes. */
+    val estimateMinutes: Int?,
     val updatedHlc: String,
     val deleted: Boolean,
 ) {

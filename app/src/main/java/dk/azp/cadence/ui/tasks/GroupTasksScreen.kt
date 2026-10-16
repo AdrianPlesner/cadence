@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import dk.azp.cadence.data.TimeEstimate
 import dk.azp.cadence.data.db.CategoryEntity
 import dk.azp.cadence.data.db.GroupEntity
 import dk.azp.cadence.data.repo.GroupRepository
@@ -230,7 +231,9 @@ private fun TaskListRow(row: TaskRow, onClick: () -> Unit, onDoneToday: () -> Un
             headlineContent = { Text(row.task.name) },
             supportingContent = {
                 Column {
-                    Text(row.daysSince?.let { "Done " + Formatting.daysAgo(it) } ?: "Not done yet")
+                    val lastDone = row.daysSince?.let { "Done " + Formatting.daysAgo(it) } ?: "Not done yet"
+                    val estimate = row.task.estimateMinutes?.let { " · ~" + TimeEstimate.format(it) } ?: ""
+                    Text(lastDone + estimate)
                     if (row.categoryNames.isNotEmpty()) {
                         Text(row.categoryNames.joinToString(" · "), style = MaterialTheme.typography.labelSmall)
                     }
