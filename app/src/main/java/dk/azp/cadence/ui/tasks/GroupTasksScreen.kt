@@ -6,6 +6,18 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.runtime.remember
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.TextField
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Close
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -14,6 +26,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -92,21 +105,36 @@ class GroupTasksViewModel(
     val categories: StateFlow<List<CategoryEntity>> =
         taskRepository.observeCategories(groupId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val rows: StateFlow<List<TaskRow>> = combine(
+    private val queryFlow = MutableStateFlow("")
+
+    /** The tasks to show, or null until the first load. Derived from one snapshot so the empty-state reason never disagrees with the rows. */
+    val taskList: StateFlow<TaskList?> = combine(
         taskRepository.observeTasks(groupId),
         categories,
         selectedCategoryFlow,
+        queryFlow,
         today,
-    ) { tasks, categoryList, selected, date ->
+    ) { tasks, categoryList, selected, query, date ->
         val names = categoryList.associate { it.id to it.name }
-        tasks
+        val inCategory = tasks
             .filter { selected == null || selected in it.task.categoryIdList() }
             .map { TaskRow.from(it, names, date) }
-            .sortedWith(TaskRow.urgencyOrder)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        val matching = inCategory.filter { TaskSearch.matches(it, query) }.sortedWith(TaskRow.urgencyOrder)
+        val emptyReason = when {
+            matching.isNotEmpty() -> null
+            tasks.isEmpty() -> EmptyReason.NO_TASKS
+            inCategory.isEmpty() -> EmptyReason.NO_CATEGORY_MATCH
+            else -> EmptyReason.NO_SEARCH_MATCH
+        }
+        TaskList(matching, emptyReason)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun selectCategory(categoryId: String?) {
         selectedCategoryFlow.value = categoryId
+    }
+
+    fun search(query: String) {
+        queryFlow.value = query
     }
 
     fun markDone(taskId: String, date: LocalDate) {
@@ -127,19 +155,37 @@ fun GroupTasksScreen(groupId: String, onBack: () -> Unit, onOpenTask: (String) -
     val group by viewModel.group.collectAsStateWithLifecycle()
     val categories by viewModel.categories.collectAsStateWithLifecycle()
     val selectedCategory by viewModel.selectedCategory.collectAsStateWithLifecycle()
-    val rows by viewModel.rows.collectAsStateWithLifecycle()
+    val taskList by viewModel.taskList.collectAsStateWithLifecycle()
+    val rows = taskList?.rows.orEmpty()
+    var searching by rememberSaveable { mutableStateOf(false) }
+    // The field's text lives here rather than round-tripping through the view model, so fast typing never loses characters.
+    var query by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(query) { viewModel.search(query) }
     var adding by rememberSaveable { mutableStateOf(false) }
     var pickingDateFor by rememberSaveable { mutableStateOf<String?>(null) }
 
     NotificationPermissionRequest(needed = rows.any { it.task.notifyWhenDue })
 
+    val closeSearch = {
+        searching = false
+        query = ""
+    }
+    BackHandler(enabled = searching, onBack = closeSearch)
+
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(group?.name ?: "") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") } },
-                actions = { IconButton(onClick = onOpenOverview) { Icon(Icons.Default.Groups, contentDescription = "Group overview") } },
-            )
+            if (searching) {
+                SearchBar(query = query, onQueryChange = { query = it }, onClose = closeSearch)
+            } else {
+                TopAppBar(
+                    title = { Text(group?.name ?: "") },
+                    navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") } },
+                    actions = {
+                        IconButton(onClick = { searching = true }) { Icon(Icons.Default.Search, contentDescription = "Search tasks") }
+                        IconButton(onClick = onOpenOverview) { Icon(Icons.Default.Groups, contentDescription = "Group overview") }
+                    },
+                )
+            }
         },
         floatingActionButton = {
             if (group?.kicked == false) {
@@ -151,9 +197,15 @@ fun GroupTasksScreen(groupId: String, onBack: () -> Unit, onOpenTask: (String) -
             if (categories.isNotEmpty()) {
                 CategoryFilterRow(categories, selectedCategory, onSelect = viewModel::selectCategory)
             }
-            if (rows.isEmpty()) {
+            val emptyReason = taskList?.emptyReason
+            if (emptyReason != null) {
+                val message = when (emptyReason) {
+                    EmptyReason.NO_TASKS -> "No tasks here yet."
+                    EmptyReason.NO_CATEGORY_MATCH -> "No tasks in this category."
+                    EmptyReason.NO_SEARCH_MATCH -> "No tasks match \u201c${query.trim()}\u201d."
+                }
                 Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Text("No tasks here yet.", textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyLarge)
+                    Text(message, textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyLarge)
                 }
             } else {
                 LazyColumn(Modifier.fillMaxSize()) {
@@ -186,6 +238,51 @@ fun GroupTasksScreen(groupId: String, onBack: () -> Unit, onOpenTask: (String) -
             onPick = { date -> pickingDateFor = null; viewModel.markDone(taskId, date) },
         )
     }
+}
+
+/** What the task list shows: the matching rows, and why it is empty when it is. */
+data class TaskList(val rows: List<TaskRow>, val emptyReason: EmptyReason?)
+
+enum class EmptyReason { NO_TASKS, NO_CATEGORY_MATCH, NO_SEARCH_MATCH }
+
+/** Replaces the top bar while searching; the field takes focus once, when search opens. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SearchBar(query: String, onQueryChange: (String) -> Unit, onClose: () -> Unit) {
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    var focusedOnOpen by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!focusedOnOpen) {
+            focusedOnOpen = true
+            focusRequester.requestFocus()
+        }
+    }
+    TopAppBar(
+        navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search") } },
+        title = {
+            TextField(
+                value = query,
+                onValueChange = onQueryChange,
+                placeholder = { Text("Search tasks") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                ),
+                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+            )
+        },
+        actions = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQueryChange("") }) { Icon(Icons.Default.Close, contentDescription = "Clear search") }
+            }
+        },
+    )
 }
 
 /** Tasks with reminders may arrive through sync, so the permission is requested when such a task is first shown. */
