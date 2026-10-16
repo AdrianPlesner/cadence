@@ -24,6 +24,8 @@ there is no server.
 - Optional time estimate per task, typed as 20, 45m, 1h 30m or 1:30.
 - Optional categories per task, with filtering.
 - Search within a group by task or category name.
+- Sort a group's tasks by deadline or name, or group them by category with collapsible sections. A task with several
+  categories shows up in each of them. The choice is remembered per group on each device.
 - Optional reminder per task: a notification when the countdown reaches zero, with a "Mark done" action.
 - Group overview with the member devices, when each was last synced, a QR invite and the option to remove a device.
 
