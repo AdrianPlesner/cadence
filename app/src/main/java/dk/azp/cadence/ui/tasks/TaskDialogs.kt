@@ -10,6 +10,9 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -29,16 +32,20 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import dk.azp.cadence.data.TimeEstimate
 import dk.azp.cadence.data.db.CategoryEntity
 import dk.azp.cadence.data.db.TaskEntity
@@ -64,13 +71,28 @@ fun TaskEditorDialog(
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     var selected by rememberSaveable { mutableStateOf(initial?.categoryIdList() ?: emptyList()) }
     var newCategory by rememberSaveable { mutableStateOf("") }
+    var newCategoryFocused by remember { mutableStateOf(false) }
+    val newCategoryRow = remember { BringIntoViewRequester() }
     val scope = rememberCoroutineScope()
     val cadenceValid = cadence.isBlank() || (cadence.toIntOrNull() ?: 0) > 0
     val estimateMinutes = TimeEstimate.parse(estimate)
     val estimateValid = estimate.isBlank() || estimateMinutes != null
 
+    // An added chip can start a new row above the field; with the keyboard open that pushes the field out of view.
+    // Wait a frame so the new chip is laid out before scrolling.
+    LaunchedEffect(categories.size) {
+        if (newCategoryFocused) {
+            withFrameNanos {}
+            newCategoryRow.bringIntoView()
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
+        // A dialog window is only panned for the keyboard, which pushes the buttons of a tall dialog behind it.
+        // Fitting the dialog above the keyboard instead makes the fields scroll and keeps Save and Cancel visible.
+        modifier = Modifier.imePadding(),
+        properties = DialogProperties(decorFitsSystemWindows = false),
         title = { Text(title) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -116,7 +138,10 @@ fun TaskEditorDialog(
                         }
                     }
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.bringIntoViewRequester(newCategoryRow).onFocusChanged { newCategoryFocused = it.hasFocus },
+                ) {
                     OutlinedTextField(
                         value = newCategory,
                         onValueChange = { newCategory = it },
