@@ -8,11 +8,9 @@ import dk.azp.cadence.data.db.CategoryEntity
 import dk.azp.cadence.data.db.ChangeEntity
 import dk.azp.cadence.data.db.CompletionEntity
 import dk.azp.cadence.data.db.DeviceEntity
-import dk.azp.cadence.data.db.TaskEntity
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonObject
 import kotlin.math.max
 
 /**
@@ -29,6 +27,7 @@ class ChangeEngine(
 ) {
 
     private val writeLock = Mutex()
+    private val taskMerge = TaskMerge(json)
 
     suspend fun record(groupId: String, type: EntityType, entityId: String, payload: Any) {
         writeLock.withLock {
@@ -138,25 +137,7 @@ class ChangeEngine(
     }
 
     private suspend fun applyTask(change: ChangeEntity) {
-        val existing = db.taskDao().get(change.entityId)
-        if (existing == null || Hlc.isNewer(change.hlc, existing.updatedHlc)) {
-            val payload = json.decodeFromString<TaskPayload>(change.payload)
-            // Versions before 0.2.0 leave the estimate out entirely; their edits must not erase it.
-            val carriesEstimate = ESTIMATE_KEY in json.parseToJsonElement(change.payload).jsonObject
-            db.taskDao().upsert(
-                TaskEntity(
-                    id = change.entityId,
-                    groupId = change.groupId,
-                    name = payload.name,
-                    cadenceDays = payload.cadenceDays,
-                    categoryIds = payload.categoryIds.joinToString(","),
-                    notifyWhenDue = payload.notifyWhenDue,
-                    estimateMinutes = if (carriesEstimate) payload.estimateMinutes else existing?.estimateMinutes,
-                    updatedHlc = change.hlc,
-                    deleted = payload.deleted,
-                )
-            )
-        }
+        taskMerge.merge(db.taskDao().get(change.entityId), change)?.let { db.taskDao().upsert(it) }
     }
 
     private suspend fun applyCompletion(change: ChangeEntity) {
@@ -171,7 +152,6 @@ class ChangeEngine(
 
     private companion object {
         const val TAG = "ChangeEngine"
-        const val ESTIMATE_KEY = "estimateMinutes"
     }
 
     private fun encode(type: EntityType, payload: Any): String = when (type) {

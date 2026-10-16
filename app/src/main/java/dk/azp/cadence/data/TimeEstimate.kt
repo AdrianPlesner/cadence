@@ -8,9 +8,10 @@ object TimeEstimate {
 
     private const val MINUTE_UNIT = "(?:m|min|mins|minute|minutes)"
     private const val HOUR_UNIT = "(?:h|hr|hrs|hour|hours)"
-    private val clockPattern = Regex("""^(\d+):(\d{1,2})$""")
-    private val hoursPattern = Regex("""^(\d+(?:\.\d+)?)\s*$HOUR_UNIT(?:\s*(\d+)\s*$MINUTE_UNIT?)?$""")
-    private val minutesPattern = Regex("""^(\d+)\s*$MINUTE_UNIT?$""")
+    // Digit counts are bounded so every number fits in an Int; the range check in parse does the rest.
+    private val clockPattern = Regex("""^(\d{1,3}):(\d{1,2})$""")
+    private val hoursPattern = Regex("""^(\d{1,3}(?:\.\d{1,2})?)\s*$HOUR_UNIT(?:\s*(\d{1,2})\s*$MINUTE_UNIT?)?$""")
+    private val minutesPattern = Regex("""^(\d{1,5})\s*$MINUTE_UNIT?$""")
 
     /**
      * Accepts "20", "45m", "45 min", "2h", "1.5h", "1h 30m", "1h30", "1 h 30 min" and "1:30". Returns null for blank,
@@ -24,7 +25,7 @@ object TimeEstimate {
         val parsed = when {
             clock != null -> clockMinutes(clock)
             hours != null -> (hours.groupValues[1].toDouble() * 60).toInt() + (hours.groupValues[2].toIntOrNull() ?: 0)
-            minutes != null -> minutes.groupValues[1].toIntOrNull()
+            minutes != null -> minutes.groupValues[1].toInt()
             else -> null
         }
         return parsed?.takeIf { it in 1..MAX_MINUTES }

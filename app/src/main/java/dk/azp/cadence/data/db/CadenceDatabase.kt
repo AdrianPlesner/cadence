@@ -18,7 +18,7 @@ import androidx.room.RoomDatabase
     ],
     version = 2,
     exportSchema = true,
-    autoMigrations = [AutoMigration(from = 1, to = 2)],
+    autoMigrations = [AutoMigration(from = 1, to = 2, spec = EstimateBackfill::class)],
 )
 abstract class CadenceDatabase : RoomDatabase() {
 

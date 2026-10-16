@@ -38,6 +38,15 @@ class TimeEstimateTest {
     }
 
     @Test
+    fun rejectsLongDigitStringsWithoutCrashingOrWrapping() {
+        assertNull(TimeEstimate.parse("12345678901:3"))
+        assertNull(TimeEstimate.parse("71582789:00"))
+        assertNull(TimeEstimate.parse("1h 99999999999m"))
+        assertNull(TimeEstimate.parse("99999999999"))
+        assertNull(TimeEstimate.parse("99999999999.5h"))
+    }
+
+    @Test
     fun formatsAndRoundTrips() {
         assertEquals("20 min", TimeEstimate.format(20))
         assertEquals("1 h", TimeEstimate.format(60))
