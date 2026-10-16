@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -39,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import dk.azp.cadence.data.TimeEstimate
 import dk.azp.cadence.data.db.CategoryEntity
 import dk.azp.cadence.data.db.TaskEntity
@@ -71,6 +73,10 @@ fun TaskEditorDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        // A dialog window is only panned for the keyboard, which pushes the buttons of a tall dialog behind it.
+        // Fitting the dialog above the keyboard instead makes the fields scroll and keeps Save and Cancel visible.
+        modifier = Modifier.imePadding(),
+        properties = DialogProperties(decorFitsSystemWindows = false),
         title = { Text(title) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
