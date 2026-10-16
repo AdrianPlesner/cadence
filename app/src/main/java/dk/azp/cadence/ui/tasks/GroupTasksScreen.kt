@@ -73,6 +73,7 @@ import androidx.lifecycle.viewModelScope
 import dk.azp.cadence.data.TimeEstimate
 import dk.azp.cadence.data.db.CategoryEntity
 import dk.azp.cadence.data.db.GroupEntity
+import dk.azp.cadence.data.db.TaskWithLastDone
 import dk.azp.cadence.data.repo.GroupRepository
 import dk.azp.cadence.data.repo.TaskEdit
 import dk.azp.cadence.data.repo.TaskRepository
@@ -84,6 +85,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -101,7 +103,6 @@ class GroupTasksViewModel(
     private val collapsedFlow = MutableStateFlow(preferences.collapsedSections(groupId))
 
     private val selectedCategoryFlow = MutableStateFlow<String?>(null)
-    val selectedCategory: StateFlow<String?> = selectedCategoryFlow
 
     /** Re-emits every minute so "days since" rolls over at midnight without user interaction. */
     private val today = flow {
@@ -114,19 +115,40 @@ class GroupTasksViewModel(
     val group: StateFlow<GroupEntity?> =
         groupRepository.observeGroup(groupId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    /** Null until the first load, so the list is never grouped against categories that haven't arrived yet. */
+    private val loadedCategories: StateFlow<List<CategoryEntity>?> =
+        taskRepository.observeCategories(groupId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     val categories: StateFlow<List<CategoryEntity>> =
-        taskRepository.observeCategories(groupId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        loadedCategories.map { it.orEmpty() }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** The chosen category filter, dropped once that category is deleted, on this device or another. */
+    val selectedCategory: StateFlow<String?> = combine(selectedCategoryFlow, loadedCategories) { selected, categoryList ->
+        selected?.takeIf { id -> categoryList == null || categoryList.any { it.id == id } }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     private val queryFlow = MutableStateFlow("")
 
     /** The tasks to show, or null until the first load. Derived from one snapshot so the empty-state reason never disagrees with the rows. */
     val taskList: StateFlow<TaskList?> = combine(
         taskRepository.observeTasks(groupId),
-        categories,
-        combine(selectedCategoryFlow, queryFlow, ::Pair),
+        loadedCategories,
+        combine(selectedCategory, queryFlow, ::Pair),
         combine(sortFlow, collapsedFlow, ::Pair),
         today,
     ) { tasks, categoryList, (selected, query), (sort, collapsed), date ->
+        categoryList?.let { buildTaskList(tasks, it, selected, query, sort, collapsed, date) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    private fun buildTaskList(
+        tasks: List<TaskWithLastDone>,
+        categoryList: List<CategoryEntity>,
+        selected: String?,
+        query: String,
+        sort: TaskSort,
+        collapsed: Set<String>,
+        date: LocalDate,
+    ): TaskList {
         val names = categoryList.associate { it.id to it.name }
         val inCategory = tasks
             .filter { selected == null || selected in it.task.categoryIdList() }
@@ -139,8 +161,8 @@ class GroupTasksViewModel(
             else -> EmptyReason.NO_SEARCH_MATCH
         }
         val items = TaskListLayout.build(matching, sort, categoryList, selected, collapsed, searching = query.isNotBlank())
-        TaskList(matching, items, emptyReason)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+        return TaskList(matching, items, emptyReason)
+    }
 
     fun selectCategory(categoryId: String?) {
         selectedCategoryFlow.value = categoryId
