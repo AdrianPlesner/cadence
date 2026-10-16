@@ -42,6 +42,14 @@ class TaskSearchTest {
     }
 
     @Test
+    fun splitsOnAnyWhitespace() {
+        val task = row("Water plants", "Garden")
+        assertTrue(TaskSearch.matches(task, "garden\twater"))
+        assertTrue(TaskSearch.matches(task, "garden\u00A0water"))
+        assertFalse(TaskSearch.matches(task, "garden\u00A0bins"))
+    }
+
+    @Test
     fun matchesNonAsciiLetters() {
         assertTrue(TaskSearch.matches(row("Vask køleskab"), "KØLE"))
     }

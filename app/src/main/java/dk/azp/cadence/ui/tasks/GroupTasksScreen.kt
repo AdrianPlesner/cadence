@@ -78,7 +78,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -107,13 +106,9 @@ class GroupTasksViewModel(
         taskRepository.observeCategories(groupId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val queryFlow = MutableStateFlow("")
-    val query: StateFlow<String> = queryFlow
 
-    /** Whether the group has any tasks at all, to tell an empty group from a filter that matches nothing. */
-    val hasTasks: StateFlow<Boolean> =
-        taskRepository.observeTasks(groupId).map { it.isNotEmpty() }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
-
-    val rows: StateFlow<List<TaskRow>> = combine(
+    /** The tasks to show, or null until the first load. Derived from one snapshot so the empty-state reason never disagrees with the rows. */
+    val taskList: StateFlow<TaskList?> = combine(
         taskRepository.observeTasks(groupId),
         categories,
         selectedCategoryFlow,
@@ -121,12 +116,18 @@ class GroupTasksViewModel(
         today,
     ) { tasks, categoryList, selected, query, date ->
         val names = categoryList.associate { it.id to it.name }
-        tasks
+        val inCategory = tasks
             .filter { selected == null || selected in it.task.categoryIdList() }
             .map { TaskRow.from(it, names, date) }
-            .filter { TaskSearch.matches(it, query) }
-            .sortedWith(TaskRow.urgencyOrder)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        val matching = inCategory.filter { TaskSearch.matches(it, query) }.sortedWith(TaskRow.urgencyOrder)
+        val emptyReason = when {
+            matching.isNotEmpty() -> null
+            tasks.isEmpty() -> EmptyReason.NO_TASKS
+            inCategory.isEmpty() -> EmptyReason.NO_CATEGORY_MATCH
+            else -> EmptyReason.NO_SEARCH_MATCH
+        }
+        TaskList(matching, emptyReason)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun selectCategory(categoryId: String?) {
         selectedCategoryFlow.value = categoryId
@@ -154,10 +155,12 @@ fun GroupTasksScreen(groupId: String, onBack: () -> Unit, onOpenTask: (String) -
     val group by viewModel.group.collectAsStateWithLifecycle()
     val categories by viewModel.categories.collectAsStateWithLifecycle()
     val selectedCategory by viewModel.selectedCategory.collectAsStateWithLifecycle()
-    val rows by viewModel.rows.collectAsStateWithLifecycle()
-    val query by viewModel.query.collectAsStateWithLifecycle()
-    val hasTasks by viewModel.hasTasks.collectAsStateWithLifecycle()
+    val taskList by viewModel.taskList.collectAsStateWithLifecycle()
+    val rows = taskList?.rows.orEmpty()
     var searching by rememberSaveable { mutableStateOf(false) }
+    // The field's text lives here rather than round-tripping through the view model, so fast typing never loses characters.
+    var query by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(query) { viewModel.search(query) }
     var adding by rememberSaveable { mutableStateOf(false) }
     var pickingDateFor by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -165,14 +168,14 @@ fun GroupTasksScreen(groupId: String, onBack: () -> Unit, onOpenTask: (String) -
 
     val closeSearch = {
         searching = false
-        viewModel.search("")
+        query = ""
     }
     BackHandler(enabled = searching, onBack = closeSearch)
 
     Scaffold(
         topBar = {
             if (searching) {
-                SearchBar(query = query, onQueryChange = viewModel::search, onClose = closeSearch)
+                SearchBar(query = query, onQueryChange = { query = it }, onClose = closeSearch)
             } else {
                 TopAppBar(
                     title = { Text(group?.name ?: "") },
@@ -194,11 +197,12 @@ fun GroupTasksScreen(groupId: String, onBack: () -> Unit, onOpenTask: (String) -
             if (categories.isNotEmpty()) {
                 CategoryFilterRow(categories, selectedCategory, onSelect = viewModel::selectCategory)
             }
-            if (rows.isEmpty()) {
-                val message = when {
-                    !hasTasks -> "No tasks here yet."
-                    query.isNotBlank() -> "No tasks match \u201c${query.trim()}\u201d."
-                    else -> "No tasks in this category."
+            val emptyReason = taskList?.emptyReason
+            if (emptyReason != null) {
+                val message = when (emptyReason) {
+                    EmptyReason.NO_TASKS -> "No tasks here yet."
+                    EmptyReason.NO_CATEGORY_MATCH -> "No tasks in this category."
+                    EmptyReason.NO_SEARCH_MATCH -> "No tasks match \u201c${query.trim()}\u201d."
                 }
                 Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
                     Text(message, textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyLarge)
@@ -236,13 +240,24 @@ fun GroupTasksScreen(groupId: String, onBack: () -> Unit, onOpenTask: (String) -
     }
 }
 
-/** Replaces the top bar while searching; the field takes focus as soon as it opens. */
+/** What the task list shows: the matching rows, and why it is empty when it is. */
+data class TaskList(val rows: List<TaskRow>, val emptyReason: EmptyReason?)
+
+enum class EmptyReason { NO_TASKS, NO_CATEGORY_MATCH, NO_SEARCH_MATCH }
+
+/** Replaces the top bar while searching; the field takes focus once, when search opens. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SearchBar(query: String, onQueryChange: (String) -> Unit, onClose: () -> Unit) {
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
-    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    var focusedOnOpen by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!focusedOnOpen) {
+            focusedOnOpen = true
+            focusRequester.requestFocus()
+        }
+    }
     TopAppBar(
         navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search") } },
         title = {
