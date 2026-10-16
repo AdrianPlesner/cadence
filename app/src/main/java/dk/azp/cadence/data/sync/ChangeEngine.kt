@@ -8,7 +8,6 @@ import dk.azp.cadence.data.db.CategoryEntity
 import dk.azp.cadence.data.db.ChangeEntity
 import dk.azp.cadence.data.db.CompletionEntity
 import dk.azp.cadence.data.db.DeviceEntity
-import dk.azp.cadence.data.db.TaskEntity
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
@@ -28,6 +27,7 @@ class ChangeEngine(
 ) {
 
     private val writeLock = Mutex()
+    private val taskMerge = TaskMerge(json)
 
     suspend fun record(groupId: String, type: EntityType, entityId: String, payload: Any) {
         writeLock.withLock {
@@ -137,22 +137,7 @@ class ChangeEngine(
     }
 
     private suspend fun applyTask(change: ChangeEntity) {
-        val existing = db.taskDao().get(change.entityId)
-        if (existing == null || Hlc.isNewer(change.hlc, existing.updatedHlc)) {
-            val payload = json.decodeFromString<TaskPayload>(change.payload)
-            db.taskDao().upsert(
-                TaskEntity(
-                    id = change.entityId,
-                    groupId = change.groupId,
-                    name = payload.name,
-                    cadenceDays = payload.cadenceDays,
-                    categoryIds = payload.categoryIds.joinToString(","),
-                    notifyWhenDue = payload.notifyWhenDue,
-                    updatedHlc = change.hlc,
-                    deleted = payload.deleted,
-                )
-            )
-        }
+        taskMerge.merge(db.taskDao().get(change.entityId), change)?.let { db.taskDao().upsert(it) }
     }
 
     private suspend fun applyCompletion(change: ChangeEntity) {

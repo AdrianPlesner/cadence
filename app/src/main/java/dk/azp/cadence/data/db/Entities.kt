@@ -1,5 +1,6 @@
 package dk.azp.cadence.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.Index
@@ -51,6 +52,10 @@ data class TaskEntity(
     val categoryIds: String,
     /** Whether every device in the group posts a notification once the cadence countdown reaches zero. */
     val notifyWhenDue: Boolean,
+    /** How long carrying out the task usually takes, in minutes. Merges separately from the rest of the row. */
+    val estimateMinutes: Int?,
+    /** Stamp of the change that set [estimateMinutes]; empty when no change has set one. */
+    @ColumnInfo(defaultValue = "") val estimateHlc: String,
     val updatedHlc: String,
     val deleted: Boolean,
 ) {

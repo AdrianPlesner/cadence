@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.AlertDialog
@@ -37,13 +39,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import dk.azp.cadence.data.TimeEstimate
 import dk.azp.cadence.data.db.CategoryEntity
 import dk.azp.cadence.data.db.TaskEntity
 import dk.azp.cadence.data.repo.TaskEdit
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
-/** Create or edit a task: name, optional cadence in days and any number of categories, including brand new ones. */
+/** Create or edit a task: name, optional cadence and time estimate, and any number of categories, including brand new ones. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TaskEditorDialog(
@@ -57,18 +60,29 @@ fun TaskEditorDialog(
     var name by rememberSaveable { mutableStateOf(initial?.name ?: "") }
     var cadence by rememberSaveable { mutableStateOf(initial?.cadenceDays?.toString() ?: "") }
     var notify by rememberSaveable { mutableStateOf(initial?.notifyWhenDue ?: false) }
+    var estimate by rememberSaveable { mutableStateOf(initial?.estimateMinutes?.let(TimeEstimate::format) ?: "") }
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     var selected by rememberSaveable { mutableStateOf(initial?.categoryIdList() ?: emptyList()) }
     var newCategory by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val cadenceValid = cadence.isBlank() || (cadence.toIntOrNull() ?: 0) > 0
+    val estimateMinutes = TimeEstimate.parse(estimate)
+    val estimateValid = estimate.isBlank() || estimateMinutes != null
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Task name") }, singleLine = true)
+                OutlinedTextField(
+                    value = estimate,
+                    onValueChange = { estimate = it },
+                    label = { Text("Time estimate") },
+                    supportingText = { Text(if (estimateValid) "Optional, e.g. 20, 45m or 1h 30m" else "Try 20, 45m or 1h 30m") },
+                    singleLine = true,
+                    isError = !estimateValid,
+                )
                 OutlinedTextField(
                     value = cadence,
                     onValueChange = { cadence = it.filter(Char::isDigit) },
@@ -123,8 +137,8 @@ fun TaskEditorDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = name.isNotBlank() && cadenceValid,
-                onClick = { onSave(TaskEdit(name.trim(), cadence.toIntOrNull(), selected, notify)) },
+                enabled = name.isNotBlank() && cadenceValid && estimateValid,
+                onClick = { onSave(TaskEdit(name.trim(), cadence.toIntOrNull(), selected, notify, estimateMinutes)) },
             ) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
