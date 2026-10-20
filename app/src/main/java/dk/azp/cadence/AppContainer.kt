@@ -11,6 +11,7 @@ import dk.azp.cadence.data.sync.Hlc
 import dk.azp.cadence.data.sync.SyncClient
 import dk.azp.cadence.data.sync.SyncManager
 import dk.azp.cadence.data.sync.SyncServer
+import dk.azp.cadence.ui.tasks.TaskListPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -33,6 +34,7 @@ class AppContainer(context: Context) {
 
     val groupRepository = GroupRepository(database, identity, engine)
     val taskRepository = TaskRepository(database, engine)
+    val taskListPreferences = TaskListPreferences(context)
 
     private val syncServer = SyncServer(database, identity, engine, json, readmitDevice = { groupId, deviceId, name ->
         groupRepository.readmitDevice(groupId, deviceId, name)
