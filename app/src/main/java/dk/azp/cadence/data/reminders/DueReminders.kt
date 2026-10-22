@@ -19,8 +19,8 @@ import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
 /**
- * Posts one notification per task whose cadence countdown has reached zero and that has reminders enabled. Safe to call
- * as often as data changes: a task keeps a single notification, and tasks that are no longer due lose theirs.
+ * Posts one notification per task whose cadence countdown has reached zero and that has reminders enabled. A task keeps a
+ * single notification, and tasks that are no longer due lose theirs.
  */
 class DueReminders(private val context: Context, private val db: CadenceDatabase) {
 
@@ -33,8 +33,12 @@ class DueReminders(private val context: Context, private val db: CadenceDatabase
         notificationManager.createNotificationChannel(channel)
     }
 
-    /** With [alertAgain] the notifications are re-posted so already shown ones make a sound once more. */
-    suspend fun refresh(alertAgain: Boolean = false) {
+    /**
+     * Reminds about the due tasks among [taskIds], or about every due task when [taskIds] is null, which is the daily
+     * morning run. Reminders of other tasks are left alone, except that tasks no longer due always lose theirs, which
+     * never makes a sound. Dismissed reminders therefore only return for a task that was itself edited.
+     */
+    suspend fun refresh(taskIds: Set<String>?) {
         val today = LocalDate.now()
         val due = db.taskDao().remindable().filter { isDue(it, today) }
         val dueIds = due.map { it.task.id }.toSet()
@@ -42,7 +46,7 @@ class DueReminders(private val context: Context, private val db: CadenceDatabase
             .filter { it.tag != null && it.tag !in dueIds }
             .forEach { notificationManager.cancel(it.tag, NOTIFICATION_ID) }
         if (canPost()) {
-            due.forEach { post(it, today, alertAgain) }
+            due.filter { taskIds == null || it.task.id in taskIds }.forEach { post(it, today) }
         }
     }
 
@@ -52,7 +56,8 @@ class DueReminders(private val context: Context, private val db: CadenceDatabase
         return cadence - ChronoUnit.DAYS.between(LocalDate.ofEpochDay(lastDone), today) <= 0
     }
 
-    private fun post(reminder: ReminderTask, today: LocalDate, alertAgain: Boolean) {
+    /** Replaces any shown reminder for the task, so the new one alerts even if the old one is still on screen. */
+    private fun post(reminder: ReminderTask, today: LocalDate) {
         val task = reminder.task
         val daysLeft = task.cadenceDays!! - ChronoUnit.DAYS.between(LocalDate.ofEpochDay(reminder.lastDone!!), today)
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
@@ -61,12 +66,9 @@ class DueReminders(private val context: Context, private val db: CadenceDatabase
             .setContentText(Formatting.dueIn(daysLeft) + " · " + reminder.groupName)
             .setContentIntent(openTaskIntent(task.groupId, task.id))
             .addAction(0, "Mark done", MarkDoneReceiver.intent(context, task.id))
-            .setOnlyAlertOnce(!alertAgain)
             .setAutoCancel(true)
             .build()
-        if (alertAgain) {
-            notificationManager.cancel(task.id, NOTIFICATION_ID)
-        }
+        notificationManager.cancel(task.id, NOTIFICATION_ID)
         notificationManager.notify(task.id, NOTIFICATION_ID, notification)
     }
 

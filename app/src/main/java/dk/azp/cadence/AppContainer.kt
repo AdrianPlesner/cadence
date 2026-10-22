@@ -30,7 +30,9 @@ class AppContainer(context: Context) {
     val dueReminders = DueReminders(context, database)
 
     private val hlc = Hlc(identity.deviceId, identity.loadHlcPhysical(), identity.loadHlcCounter(), persist = identity::saveHlc)
-    private val engine = ChangeEngine(database, identity, hlc, json) { appScope.launch { dueReminders.refresh() } }
+    private val engine = ChangeEngine(database, identity, hlc, json) { touchedTaskIds ->
+        appScope.launch { dueReminders.refresh(touchedTaskIds) }
+    }
 
     val groupRepository = GroupRepository(database, identity, engine)
     val taskRepository = TaskRepository(database, engine)

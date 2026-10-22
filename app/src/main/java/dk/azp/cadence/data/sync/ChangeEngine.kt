@@ -22,15 +22,15 @@ class ChangeEngine(
     private val identity: DeviceIdentity,
     private val hlc: Hlc,
     private val json: Json,
-    /** Called after any batch of changes, local or remote, has been applied. */
-    private val onChanged: () -> Unit = {},
+    /** Called after any batch of changes, local or remote, has been applied, with the ids of the tasks it touched. */
+    private val onChanged: (touchedTaskIds: Set<String>) -> Unit = {},
 ) {
 
     private val writeLock = Mutex()
     private val taskMerge = TaskMerge(json)
 
     suspend fun record(groupId: String, type: EntityType, entityId: String, payload: Any) {
-        writeLock.withLock {
+        val change = writeLock.withLock {
             db.withTransaction {
                 val seq = max(identity.lastSeq, db.changeDao().maxSeq(identity.deviceId)) + 1
                 identity.lastSeq = seq
@@ -45,21 +45,22 @@ class ChangeEngine(
                 )
                 db.changeDao().insert(change)
                 applyToLiveTables(change)
+                change
             }
         }
-        onChanged()
+        onChanged(TouchedTasks.of(listOf(change), json))
     }
 
     /** Applies changes received from a peer. Returns how many were new to this device. */
     suspend fun applyRemote(groupId: String, changes: List<ChangeDto>): Int {
-        var applied = 0
+        val applied = mutableListOf<ChangeEntity>()
         writeLock.withLock {
             db.withTransaction {
                 for (dto in changes) {
                     val change = dto.toEntity(groupId)
                     val inserted = db.changeDao().insert(change) != -1L
                     if (inserted) {
-                        applied++
+                        applied += change
                         // A change this version cannot interpret is still stored and relayed; it must not block the batch.
                         runCatching {
                             hlc.observe(change.hlc)
@@ -69,10 +70,10 @@ class ChangeEngine(
                 }
             }
         }
-        if (applied > 0) {
-            onChanged()
+        if (applied.isNotEmpty()) {
+            onChanged(TouchedTasks.of(applied, json))
         }
-        return applied
+        return applied.size
     }
 
     suspend fun cursors(groupId: String): Map<String, Long> =

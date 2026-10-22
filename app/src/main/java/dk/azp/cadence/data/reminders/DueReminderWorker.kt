@@ -16,7 +16,7 @@ import java.time.LocalTime
 class DueReminderWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
 
     override suspend fun doWork(): Result {
-        (applicationContext as CadenceApp).container.dueReminders.refresh(alertAgain = true)
+        (applicationContext as CadenceApp).container.dueReminders.refresh(taskIds = null)
         schedule(applicationContext, ExistingWorkPolicy.REPLACE)
         return Result.success()
     }
