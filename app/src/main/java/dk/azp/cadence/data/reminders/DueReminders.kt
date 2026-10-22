@@ -15,6 +15,8 @@ import dk.azp.cadence.R
 import dk.azp.cadence.data.db.CadenceDatabase
 import dk.azp.cadence.data.db.ReminderTask
 import dk.azp.cadence.ui.Formatting
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
@@ -26,6 +28,9 @@ class DueReminders(private val context: Context, private val db: CadenceDatabase
 
     private val notificationManager = context.getSystemService(NotificationManager::class.java)
 
+    /** Refreshes run one at a time, so a slow one can't re-post a reminder that a later one just removed. */
+    private val refreshLock = Mutex()
+
     fun ensureChannel() {
         val channel = NotificationChannel(CHANNEL_ID, "Due tasks", NotificationManager.IMPORTANCE_DEFAULT).apply {
             description = "A task's repeat interval has run out"
@@ -34,11 +39,12 @@ class DueReminders(private val context: Context, private val db: CadenceDatabase
     }
 
     /**
-     * Reminds about the due tasks among [taskIds], or about every due task when [taskIds] is null, which is the daily
-     * morning run. Reminders of other tasks are left alone, except that tasks no longer due always lose theirs, which
-     * never makes a sound. Dismissed reminders therefore only return for a task that was itself edited.
+     * Reminds about the due tasks among [taskIds] and in [groupIds], or about every due task when [taskIds] is null,
+     * which is the daily morning run. Reminders of other tasks are left alone, except that tasks no longer due always
+     * lose theirs, which never makes a sound. Dismissed reminders therefore only return for a task that was itself
+     * edited, or after this device is readmitted to its group.
      */
-    suspend fun refresh(taskIds: Set<String>?) {
+    suspend fun refresh(taskIds: Set<String>?, groupIds: Set<String> = emptySet()) = refreshLock.withLock {
         val today = LocalDate.now()
         val due = db.taskDao().remindable().filter { isDue(it, today) }
         val dueIds = due.map { it.task.id }.toSet()
@@ -46,7 +52,7 @@ class DueReminders(private val context: Context, private val db: CadenceDatabase
             .filter { it.tag != null && it.tag !in dueIds }
             .forEach { notificationManager.cancel(it.tag, NOTIFICATION_ID) }
         if (canPost()) {
-            due.filter { taskIds == null || it.task.id in taskIds }.forEach { post(it, today) }
+            due.filter { taskIds == null || it.task.id in taskIds || it.task.groupId in groupIds }.forEach { post(it, today) }
         }
     }
 
