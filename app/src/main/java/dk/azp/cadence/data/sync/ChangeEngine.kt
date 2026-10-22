@@ -23,15 +23,25 @@ class ChangeEngine(
     private val hlc: Hlc,
     private val json: Json,
     /** Called after any batch of changes, local or remote, has been applied. */
-    private val onChanged: () -> Unit = {},
+    private val onChanged: (ChangeEffects) -> Unit = {},
 ) {
+
+    /**
+     * What a batch did that reminders care about: the tasks whose live state it changed, and the groups this device was
+     * readmitted to.
+     */
+    data class ChangeEffects(val touchedTaskIds: Set<String>, val readmittedGroupIds: Set<String>)
+
+    /** Groups this device was readmitted to during the batch being applied; only touched under [writeLock]. */
+    private val readmittedGroups = mutableSetOf<String>()
 
     private val writeLock = Mutex()
     private val taskMerge = TaskMerge(json)
 
     suspend fun record(groupId: String, type: EntityType, entityId: String, payload: Any) {
-        writeLock.withLock {
-            db.withTransaction {
+        val effects = writeLock.withLock {
+            readmittedGroups.clear()
+            val change = db.withTransaction {
                 val seq = max(identity.lastSeq, db.changeDao().maxSeq(identity.deviceId)) + 1
                 identity.lastSeq = seq
                 val change = ChangeEntity(
@@ -45,35 +55,44 @@ class ChangeEngine(
                 )
                 db.changeDao().insert(change)
                 applyToLiveTables(change)
+                change
             }
+            ChangeEffects(TouchedTasks.of(listOf(change), json), takeReadmittedGroups())
         }
-        onChanged()
+        onChanged(effects)
     }
 
     /** Applies changes received from a peer. Returns how many were new to this device. */
     suspend fun applyRemote(groupId: String, changes: List<ChangeDto>): Int {
-        var applied = 0
-        writeLock.withLock {
+        var newCount = 0
+        val effective = mutableListOf<ChangeEntity>()
+        val effects = writeLock.withLock {
+            readmittedGroups.clear()
             db.withTransaction {
                 for (dto in changes) {
                     val change = dto.toEntity(groupId)
                     val inserted = db.changeDao().insert(change) != -1L
                     if (inserted) {
-                        applied++
+                        newCount++
                         // A change this version cannot interpret is still stored and relayed; it must not block the batch.
                         runCatching {
                             hlc.observe(change.hlc)
-                            applyToLiveTables(change)
+                            if (applyToLiveTables(change)) {
+                                effective += change
+                            }
                         }.onFailure { Log.w(TAG, "Could not apply ${change.entityType} ${change.entityId} from ${change.originDevice}", it) }
                     }
                 }
             }
+            ChangeEffects(TouchedTasks.of(effective, json), takeReadmittedGroups())
         }
-        if (applied > 0) {
-            onChanged()
+        if (newCount > 0) {
+            onChanged(effects)
         }
-        return applied
+        return newCount
     }
+
+    private fun takeReadmittedGroups(): Set<String> = readmittedGroups.toSet().also { readmittedGroups.clear() }
 
     suspend fun cursors(groupId: String): Map<String, Long> =
         db.changeDao().cursors(groupId).associate { it.originDevice to it.seq }
@@ -84,7 +103,8 @@ class ChangeEngine(
             db.changeDao().after(groupId, local.originDevice, peerCursors[local.originDevice] ?: 0L)
         }.map { it.toDto() }
 
-    private suspend fun applyToLiveTables(change: ChangeEntity) {
+    /** Returns whether the change altered the live tables; an older change that loses the merge does not. */
+    private suspend fun applyToLiveTables(change: ChangeEntity): Boolean =
         when (EntityType.valueOf(change.entityType)) {
             EntityType.GROUP -> applyGroup(change)
             EntityType.DEVICE -> applyDevice(change)
@@ -92,21 +112,22 @@ class ChangeEngine(
             EntityType.TASK -> applyTask(change)
             EntityType.COMPLETION -> applyCompletion(change)
         }
-    }
 
-    private suspend fun applyGroup(change: ChangeEntity) {
-        val existing = db.groupDao().get(change.entityId) ?: return
-        if (Hlc.isNewer(change.hlc, existing.updatedHlc)) {
+    private suspend fun applyGroup(change: ChangeEntity): Boolean {
+        val existing = db.groupDao().get(change.entityId)
+        val newer = existing != null && Hlc.isNewer(change.hlc, existing.updatedHlc)
+        if (newer) {
             val payload = json.decodeFromString<GroupPayload>(change.payload)
             db.groupDao().updateName(change.entityId, payload.name, change.hlc)
         }
+        return newer
     }
 
     /**
      * Name and membership merge as separate fields. A device's own writes never change its membership, so a kicked
      * device cannot readmit itself by renaming, and a kick is never lost to a concurrent self-edit.
      */
-    private suspend fun applyDevice(change: ChangeEntity) {
+    private suspend fun applyDevice(change: ChangeEntity): Boolean {
         val payload = json.decodeFromString<DevicePayload>(change.payload)
         val existing = db.deviceDao().get(change.groupId, change.entityId)
         val selfWrite = change.originDevice == change.entityId
@@ -125,29 +146,39 @@ class ChangeEngine(
         db.deviceDao().upsert(merged)
         if (change.entityId == identity.deviceId) {
             db.groupDao().setKicked(change.groupId, merged.deleted)
+            if (existing?.deleted == true && !merged.deleted) {
+                readmittedGroups += change.groupId
+            }
         }
+        return merged != existing
     }
 
-    private suspend fun applyCategory(change: ChangeEntity) {
+    private suspend fun applyCategory(change: ChangeEntity): Boolean {
         val existing = db.categoryDao().get(change.entityId)
-        if (existing == null || Hlc.isNewer(change.hlc, existing.updatedHlc)) {
+        val newer = existing == null || Hlc.isNewer(change.hlc, existing.updatedHlc)
+        if (newer) {
             val payload = json.decodeFromString<CategoryPayload>(change.payload)
             db.categoryDao().upsert(CategoryEntity(change.entityId, change.groupId, payload.name, change.hlc, payload.deleted))
         }
+        return newer
     }
 
-    private suspend fun applyTask(change: ChangeEntity) {
-        taskMerge.merge(db.taskDao().get(change.entityId), change)?.let { db.taskDao().upsert(it) }
+    private suspend fun applyTask(change: ChangeEntity): Boolean {
+        val merged = taskMerge.merge(db.taskDao().get(change.entityId), change)
+        merged?.let { db.taskDao().upsert(it) }
+        return merged != null
     }
 
-    private suspend fun applyCompletion(change: ChangeEntity) {
+    private suspend fun applyCompletion(change: ChangeEntity): Boolean {
         val existing = db.completionDao().get(change.entityId)
-        if (existing == null || Hlc.isNewer(change.hlc, existing.updatedHlc)) {
+        val newer = existing == null || Hlc.isNewer(change.hlc, existing.updatedHlc)
+        if (newer) {
             val payload = json.decodeFromString<CompletionPayload>(change.payload)
             db.completionDao().upsert(
                 CompletionEntity(change.entityId, change.groupId, payload.taskId, payload.doneDate, change.hlc, payload.deleted)
             )
         }
+        return newer
     }
 
     private companion object {
